@@ -29,11 +29,12 @@ jobs:
       - name: Check syntax
         run: npm run check
 
-      - name: Self-test
-        run: npm test
-
+      # 客户端自测直接读 lib/client.js（构建产物），所以构建必须排在测试前面。
       - name: Build client bundle
         run: npm run build
+
+      - name: Self-test
+        run: npm test
 
       # 仓库里提交的 lib/client.js 必须与源码构建结果一致，
       # 否则发出去的是过期 bundle。构建脚本是确定性的（scripts/build-client.mjs）。

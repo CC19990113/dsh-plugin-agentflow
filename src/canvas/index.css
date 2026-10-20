@@ -1,0 +1,216 @@
+/*
+ * 画布样式（内联模式适配）
+ *
+ * 这份 CSS 现在由 CanvasHost 以 `?inline` 注入 DSH 宿主页面，所以不能再有
+ * 全局副作用：
+ *   - 不引 Tailwind preflight（`@import 'tailwindcss'` 会带全局 reset），
+ *     只保留 theme + utilities，reset 收进下面的 @layer base 并限定 .af-canvas；
+ *   - 变量、html/body 上的基础规则全部收进 .af-canvas 作用域；
+ *   - React Flow 等第三方选择器都加 .af-canvas 前缀。
+ * 独立浏览器打开（src/main.tsx）时同样生效，行为不变。
+ *
+ * 注意：@layer 顺序必须显式声明，且 reset 在 base 层，utility 才能覆盖它。
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+/* Tailwind v4：用 .dark 类而不是 prefers-color-scheme，交给主题开关控制 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* preflight 的最小子集：只作用于画布内部，避免 reset DSH 宿主页面 */
+@layer base {
+  .af-canvas,
+  .af-canvas *,
+  .af-canvas *::before,
+  .af-canvas *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid;
+  }
+
+  .af-canvas :where(h1, h2, h3, h4, h5, h6) {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  .af-canvas :where(ol, ul, menu) {
+    list-style: none;
+  }
+
+  .af-canvas :where(a) {
+    color: inherit;
+    text-decoration: inherit;
+  }
+
+  .af-canvas :where(b, strong) {
+    font-weight: bolder;
+  }
+
+  .af-canvas :where(code, kbd, samp, pre) {
+    font-family: var(--mono);
+    font-size: 1em;
+  }
+
+  .af-canvas :where(img, svg, video, canvas, audio, iframe, embed, object) {
+    display: block;
+    vertical-align: middle;
+  }
+
+  .af-canvas :where(img, video) {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .af-canvas :where(button, input, select, optgroup, textarea) {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    border-radius: 0;
+    background-color: transparent;
+    opacity: 1;
+  }
+
+  .af-canvas :where(textarea) {
+    resize: vertical;
+  }
+
+  .af-canvas ::placeholder {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------------------------
+   墨色工具 —— 设计取向
+   中性纸面 + 墨黑文字，唯一的彩色是状态（运行中朱橙、完成墨绿、失败赭红）。
+   不用蓝色主色、不用统一大圆角、不用柔和灰阴影：那三样合起来就是模板味。
+   参数与 ID 走等宽，给这个工具一点仪器的感觉。
+   ------------------------------------------------------------------ */
+
+.af-canvas {
+  color-scheme: light;
+  --bg: #f4f5f2;
+  --fg: #1c1c1a;
+  --line: #e2e4e0;
+  --accent: #c2410c;   /* 朱橙：只给「正在运行」 */
+  --ink: #24543f;      /* 墨绿：主色，克制地用在选中与主按钮 */
+  --muted: #6b6b66;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /* 根容器撑满宿主给的槽位（CanvasHost 会保证父级高度） */
+  height: 100%;
+  margin: 0;
+  /* antd 弹层 portal 到画布根容器，容器定位后才好对齐 */
+  position: relative;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', ui-sans-serif, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.af-canvas.dark {
+  color-scheme: dark;
+  --bg: #121312;
+  --fg: #e8e8e4;
+  --line: #262724;
+  --accent: #f97316;
+  --ink: #6aa583;
+  --muted: #8b8b85;
+}
+
+/* 参数行、ID、token 数用等宽，让「数据」和「文案」在视觉上分开 */
+.af-canvas .mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* React Flow */
+.af-canvas .react-flow__node {
+  font-family: inherit;
+}
+
+.af-canvas .react-flow__handle {
+  width: 9px;
+  height: 9px;
+  background: #b9bcb4;
+  border: 2px solid #fff;
+  transition: background 0.15s, transform 0.15s;
+}
+.af-canvas.dark .react-flow__handle {
+  background: #4a4d47;
+  border-color: #1a1b19;
+}
+.af-canvas .react-flow__handle:hover {
+  background: var(--ink);
+  transform: scale(1.25);
+}
+
+/* 控件与缩略图跟着主题走，且去掉默认的圆润边框 */
+.af-canvas .react-flow__controls {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.06);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.af-canvas .react-flow__controls-button {
+  background: #fff;
+  border-color: var(--line);
+  color: #3f3f3a;
+  fill: #3f3f3a;
+}
+.af-canvas .react-flow__controls-button:hover {
+  background: #f0f1ed;
+}
+.af-canvas.dark .react-flow__controls {
+  background: #1a1b19;
+  border-color: var(--line);
+}
+.af-canvas.dark .react-flow__controls-button {
+  background: #1a1b19;
+  border-color: var(--line);
+  color: #c9cec7;
+  fill: #c9cec7;
+}
+.af-canvas.dark .react-flow__controls-button:hover {
+  background: #232421;
+}
+.af-canvas .react-flow__minimap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.af-canvas.dark .react-flow__minimap {
+  background: #151614;
+  border-color: var(--line);
+}
+
+/* 选中卡片时的焦点环，键盘也能看见 */
+.af-canvas .react-flow__node:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+/* 运行中卡片顶部状态条上的「处理中」扫光：一条亮带不停从左到右划过 */
+@keyframes af-bar-scan {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(240%);
+  }
+}
+.af-canvas .af-bar-scan {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.95) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: af-bar-scan 1.2s linear infinite;
+}
