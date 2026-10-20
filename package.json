@@ -34,6 +34,10 @@
     "sync": "node scripts/sync-runtime.mjs"
   },
   "type": "module",
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2"
+  },
   "files": [
     "index.js",
     "lib/**/*.js",
