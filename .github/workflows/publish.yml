@@ -60,6 +60,11 @@ jobs:
             test -f "$f" || { echo "::error::missing $f (run npm run sync)"; exit 1; }
           done
 
+      - name: Token fingerprint (diagnostic)
+        run: printf '%s' "$NODE_AUTH_TOKEN" | sha256sum | cut -c1-8
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish
         run: npm publish --access public
         env:
