@@ -125,6 +125,17 @@ npm test        # 插件自测（83 项）
 
 引擎侧测试在 `~/.dsh/agent-flow/test`（85 项）。
 
+## 发布
+
+发布由 **GitHub Release 触发**，不在本地手动 `npm publish`：
+
+1. 升 `package.json`（和 `package-lock.json`）的版本号
+2. 打 tag 并创建 Release：`gh release create v0.2.3 --title "v0.2.3" --notes-file notes.md`
+3. Release 发布后 [`.github/workflows/publish.yml`](.github/workflows/publish.yml) 自动执行：
+   `npm ci` → 语法检查 → 自测 → 构建客户端 → 校验提交的 `lib/client.js` 与源码构建一致 → 校验 tag 与 `package.json` 版本一致 → `npm publish --provenance`
+
+需要仓库 secret `NPM_TOKEN`：npm granular token，权限选 `Read and write (publish and stage)`，并勾选 `Bypass two-factor authentication`。
+
 ## License
 
 [MIT](./LICENSE)

@@ -1,0 +1,67 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # npm provenance: 铸造 OIDC token，给发布出去的 tarball 附上
+      # “由本仓库这次提交构建”的证明；少了它发布仍会成功，但会静默丢掉 provenance 徽章。
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # 发出去的版本号收不回来（npm 禁止复用），所以先跑完检查再发。
+      - name: Check syntax
+        run: npm run check
+
+      - name: Self-test
+        run: npm test
+
+      - name: Build client bundle
+        run: npm run build
+
+      # 仓库里提交的 lib/client.js 必须与源码构建结果一致，
+      # 否则发出去的是过期 bundle。构建脚本是确定性的（scripts/build-client.mjs）。
+      - name: Verify committed client bundle is up to date
+        run: git diff --exit-code lib/client.js
+
+      # Release tag 与 package.json 版本必须一致：v0.2.3 ↔ 0.2.3。
+      # 不一致说明打错 tag 或忘了升版本，宁可不发。
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match package.json version $pkg"
+            exit 1
+          fi
+
+      # runtime/ 是 npm run sync 从本机引擎同步来的快照，CI 里没有引擎目录，
+      # 只做存在性校验：缺文件就别发一个装不了的包。
+      - name: Verify bundled runtime is present
+        run: |
+          for f in runtime/server.mjs runtime/engine.mjs runtime/web/dist/index.html; do
+            test -f "$f" || { echo "::error::missing $f (run npm run sync)"; exit 1; }
+          done
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true

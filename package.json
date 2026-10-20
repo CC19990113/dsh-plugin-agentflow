@@ -1,19 +1,37 @@
 {
   "name": "dsh-plugin-agentflow",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DeepSeek Harness tool plugin: run AgentFlow (material-canvas agent orchestrator) boards from the model",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "cordis",
+    "cordis-plugin",
+    "agentflow",
+    "agent-orchestration",
+    "workflow",
+    "dag",
+    "canvas",
+    "ai-agent",
+    "llm-tools",
+    "agent-tools"
+  ],
+  "author": "CC ZHAO",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CC19990113/dsh-plugin-agentflow.git"
+  },
+  "homepage": "https://github.com/CC19990113/dsh-plugin-agentflow#readme",
+  "bugs": "https://github.com/CC19990113/dsh-plugin-agentflow/issues",
   "main": "index.js",
   "scripts": {
     "check": "node --check index.js && node --check lib/bridge.js && node --check scripts/sync-runtime.mjs",
     "test": "node test/bridge.selftest.mjs",
     "build": "node scripts/build-client.mjs",
     "sync": "node scripts/sync-runtime.mjs"
-  },
-  "author": "",
-  "license": "MIT",
-  "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2"
   },
   "type": "module",
   "files": [
@@ -22,8 +40,13 @@
     "runtime/**",
     "cordis.patch.yml",
     "scripts/**/*.mjs",
+    "docs/images/*.png",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
