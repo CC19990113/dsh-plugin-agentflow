@@ -1,89 +1,130 @@
-# dsh-plugin-agentflow
+# AgentFlow · DSH 插件
 
-把 AgentFlow（物料画布式 agent 编排器）接进 DeepSeek Harness 的桌面插件：
+> 在 DeepSeek Harness 里用**画布**编排 agent 工作流，一键生成 DSH 预设 —— 每一步由你定义，而不是塞进一个黑盒循环。
 
-- 设置页 / 侧边栏嵌入画布界面（本地后端 `http://127.0.0.1:8791`）
-- 模型工具 `agentflow_list` / `agentflow_run`：看画布、跑画布
-- 引擎随插件分发（`runtime/`），装完即用，不需要单独安装 `~/.dsh/agent-flow`
-- 模型调用走 DSH 内核的 llm bridge（插件在 DSH 进程里起），不再自带 provider 凭据
+[![npm](https://img.shields.io/npm/v/dsh-plugin-agentflow?color=24543F&label=npm)](https://www.npmjs.com/package/dsh-plugin-agentflow)
+[![license](https://img.shields.io/badge/license-MIT-24543F)](./LICENSE)
+[![DSH](https://img.shields.io/badge/DSH-0.2.x-6aa583)](https://github.com/deepseek-ai)
+
+![画布](docs/images/canvas-light.png)
+
+## 是什么
+
+DSH 自带的 agent 是「一个模型 + 一堆工具」的循环，中间怎么想、调什么，你看不见也改不了。
+
+AgentFlow 把它掰开：**画布上的每张卡片就是一个 agent 步骤**。你决定有几步、谁先谁后、谁并行、每步用哪个模型、能不能调 MCP 工具、做完怎么验收。编排好之后导出成一个 DSH 预设，在对话里直接选中它。
+
+- **节点**：LLM（调模型）/ MCP（直接调工具，不经过模型）/ 调度（根，对话入口）
+- **执行**：纯 DAG，无上游先跑、同层并行、失败不阻塞其它分支
+- **模型**：全部走 DSH 自己的模型通道（`ctx.llm`），推理强度和兜底模型可逐节点配
+- **预设**：根节点承载人格，导出时自动附上子节点清单，写进 DSH profile
 
 ## 安装
 
-DSH 桌面版 → **设置 → 插件 → 添加插件**，然后二选一：
+### 从 npm
 
-- 输入 GitHub 仓库地址（例：`https://github.com/<owner>/dsh-plugin-agentflow`）
-- 输入本地目录（克隆下来的插件目录）
-
-DSH 会安装插件依赖并加载；侧边栏/设置页出现 AgentFlow 即成功，**不需要手动起服务、不需要构建前端**（仓库里已包含构建好的客户端与 `runtime/` 引擎）。
-
-## 首次启动会发生什么
-
-1. 插件用当前 DSH 的 Node 进程拉起 `runtime/server.mjs`（先探测 8791 端口，已在跑就不重复起；日志丢弃，不污染 DSH 终端）
-2. 后端监听 `127.0.0.1:8791`，数据目录默认 `~/.dsh/agent-flow-data`
-3. 若新数据目录不存在或为空，且旧目录 `~/.dsh/agent-flow/data` 里有 `board.json`，会自动把旧数据抄一份过来（只抄一次，旧文件保留不动）
-4. 新环境没有画布时，后端会自动建一张默认画布，打开页面即可看到
-
-## 数据目录
-
-默认：`~/.dsh/agent-flow-data/`
+DSH → 设置 → 插件 → 添加插件 → 输入：
 
 ```
-boards.json            # 画布索引
-boards/<id>.json       # 每张画布
-config.json            # 引擎配置（含密钥时权限 0600）
-drafts/                # 画布草稿
-data/dsh-bridge.json   # DSH llm bridge 的发现文件（进程级 token）
+dsh-plugin-agentflow
 ```
 
-覆盖方式（优先级从高到低）：
+### 从 GitHub
 
-| 方式 | 例子 |
-| --- | --- |
-| 插件配置 `dataDir` | `{ "dataDir": "/path/to/data" }` |
-| 环境变量 `AGENTFLOW_DATA_DIR` | 启动 DSH 前 export |
-| 默认值 | `~/.dsh/agent-flow-data` |
+```
+CC19990113/dsh-plugin-agentflow
+```
 
-数据目录别放进插件安装目录：升级/重装插件会覆盖安装目录。
+装完重启 DSH。左侧栏出现 **AgentFlow** 入口，后端由插件自动拉起（默认 `127.0.0.1:8791`），不需要手动跑命令。
 
-## 依赖
+要求：DSH 桌面版 0.2.x、Node 22+。
 
-- DSH 0.2.x（插件依赖 `@deepseek-ai/dsh-tools ^0.2.1-rc.2`、`@deepseek-ai/cordis ^4.0.5`）
-- Node 22+（后端用到 `fetch`、`AbortSignal.timeout`、`fs.cp`）
-- 模型通道：引擎通过 DSH 内置的 llm bridge 调模型，需要 DSH 正在运行且插件已加载。DSH 没起 / 插件未加载时，画布仍能打开和编辑；关掉 mock 后跑图会失败，错误含「DSH 内核未连接」
-- 引擎默认是 mock 模式（返回假输出，不调用模型）；在画布设置里关掉 mock 才会真正调模型
+## 怎么用
 
-## 预设导出
+### 1. 画布列表
 
-画布可导出成 DSH 预设，写入 `~/.dsh/profiles/<profile>/`（默认 profile 为 `desktop`）。
+![画布列表](docs/images/boards-list.png)
 
-- 换 profile：启动 DSH 前设置 `AGENTFLOW_PROFILE=<profile 名>`，后端子进程会继承
-- profile 目录不存在时导出接口返回 400，并提示具体路径
+每张画布对应一个 DSH 预设。卡片上会标出「对话入口」（哪张卡是和用户对话的根节点），改过画布但没更新预设时显示 **预设未更新**。
+
+### 2. 编排
+
+- 拖卡片改位置，从卡片边缘拖线连上下游
+- 点卡片改模型、推理强度、兜底模型、技能、MCP 工具
+- 「加下游 / 加上游」快速派生新卡
+- 编辑**自动保存**，点「保存」才会把你的编排**生成/覆盖成 DSH 预设**
+
+### 3. 验证
+
+顶栏「验证 AgentFlow」会真实跑一遍整张图（会消耗 token），用来看流程通不通。卡片上只显示配置摘要，不堆运行产出。
+
+### 4. 导出成预设
+
+点「保存」（或 ⌘S）→ 画布落库 + 预设写入 `~/.dsh/profiles/<profile>/cordis.patch.yml`。重启 DSH 后，新会话的预设列表里就能选到它。
+
+预设长这样：
+
+```
+你是「AgentFlow」的对话入口。
+你只负责和用户对话：问清需求、确认关键信息。
+需求明确后，严格按照后续节点的 AgentFlow 流去执行，不要自己直接产出结果。
+
+【完成标准】…
+【子节点】共 4 个
+- 大纲：根据给定的题材，写一个三幕剧的简要大纲
+- 对白版：为关键场景写几句有张力的对白
+…
+```
+
+## 深色模式
+
+![深色](docs/images/canvas-dark.png)
+
+主题跟随 DSH：插件把当前主题拼进 iframe 地址，画布启动时按它初始化；手动切换只在本次会话内生效，DSH 重开时重新读配置。
+
+## 架构
+
+```
+DSH 桌面
+├── 插件（index.js）
+│   ├── 工具：agentflow_list / agentflow_run
+│   ├── 客户端：侧边栏入口、设置页分区、画布 iframe
+│   └── 子进程：node runtime/server.mjs → 127.0.0.1:8791
+│       ├── engine.mjs   纯 DAG 执行器
+│       ├── llm.mjs      调模型（只走 bridge）
+│       └── web/dist     画布前端
+└── llm bridge（lib/bridge.js）
+    └── 把 ctx.llm 暴露给引擎，模型调用始终在 DSH 进程内
+```
+
+`runtime/` 是打包时从引擎仓库同步过来的副本（`npm run sync`），所以插件自带完整引擎，装完即用。
+
+## 配置
+
+| 项 | 默认 | 说明 |
+|---|---|---|
+| 数据目录 | `~/.dsh/agent-flow-data` | 首次启动会自动从 `~/.dsh/agent-flow/data` 迁移 |
+| 后端端口 | `8791` | 可用 `agentflowPort` 插件配置改 |
+| 预设 profile | `desktop` | 用环境变量 `AGENTFLOW_PROFILE` 指定别的 profile |
+
+## 限制
+
+- **只在 macOS 上验证过**，Windows 的路径与命令未测
+- 运行态是全局的：跑图时切换画布，事件会被丢弃；「停止」不分画布
+- 验证跑图会真实调用模型，注意 token 消耗
+- 预设依赖 DSH profile 的 patch 机制，profile 结构变了要跟着调整
 
 ## 开发
 
 ```bash
-npm install
-npm run sync     # 把 ~/.dsh/agent-flow 的引擎快照进 runtime/（清空重建）
-npm run check    # node --check
-npm test         # bridge 自测
-npm run build    # 构建客户端 bundle（改了 src/client.tsx 才需要）
+npm run build   # 构建客户端 bundle（lib/client.js）
+npm run sync    # 从 ~/.dsh/agent-flow 同步引擎到 runtime/
+npm run check   # 语法检查
+npm test        # 插件自测（83 项）
 ```
 
-- `runtime/` 是 `npm run sync` 的生成物，不要手改；引擎更新后重新跑一次 sync
-- 开发时想直接改引擎源码，不必每次 sync：配 `agentflowDir` 或设 `AGENTFLOW_DIR=~/.dsh/agent-flow`，插件会改用该目录的引擎（此时 bridge 发现文件也写在该目录的 `data/` 下）
-- 同步源可用 `AGENTFLOW_SRC=/path/to/agent-flow npm run sync` 指定
+引擎侧测试在 `~/.dsh/agent-flow/test`（85 项）。
 
-插件配置项：
+## License
 
-| 配置 | 说明 |
-| --- | --- |
-| `agentflowDir` | 引擎目录（开发用），覆盖自带 `runtime/` |
-| `agentflowPort` | 后端端口，默认 `8791`（界面目前固定连 8791，改端口需同步改客户端） |
-| `dataDir` | 数据目录，默认 `~/.dsh/agent-flow-data` |
-
-## 限制
-
-- 只在 macOS 上验证过；Windows 未测试（路径、进程管理可能还需适配）
-- 端口默认固定 `8791`；被别的实例占用时，探测到存活就复用，否则启动会失败（插件客户端的 iframe 也写死了 8791，改端口需要同时改客户端）
-- 一个 DSH 进程只托管一个自建后端；插件卸载时会杀掉自己拉起的那个，外部已在跑的不管
-- 引擎是插件版本快照：升级引擎需要重新 `npm run sync` 并发布新版本插件
+[MIT](./LICENSE)

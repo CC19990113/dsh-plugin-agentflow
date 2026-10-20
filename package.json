@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-agentflow",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DeepSeek Harness tool plugin: run AgentFlow (material-canvas agent orchestrator) boards from the model",
   "main": "index.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "sync": "node scripts/sync-runtime.mjs"
   },
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
     "@deepseek-ai/dsh-tools": "^0.2.1-rc.2"
