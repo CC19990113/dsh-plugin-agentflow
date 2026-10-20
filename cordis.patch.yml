@@ -1,0 +1,195 @@
+# dsh-plugin-agentflow 的 bundle patch：把 AgentFlow 的两个工具挂到 profile 上。
+#
+# 与其它 DSH 插件同样的形状 —— 用户的 profile patch 可以按 id 覆写这一行来改
+# agentflowDir（画布数据所在目录），不必复制整个插件配置。
+
+- insert:
+    - id: agentflow
+      name: 'dsh-plugin-agentflow'
+
+# >>> AgentFlow 预设（自动生成，重新导出会整体替换这段）
+# 本文件由 AgentFlow 自动生成，请勿手改 —— 重新生成会整体覆盖。
+# 来源画布：《AgentFlow》（id: demo）
+# 生成器：~/.dsh/agent-flow/preset-gen.mjs
+# 注意：delegation 组里的 tool-subagent 是分层下发子 agent 的唯一途径，不要删。
+
+- insert:
+  - id: preset-flow-agentflow
+    name: '@deepseek-ai/dsh-agent-preset'
+    config:
+      id: flow-agentflow
+      name: 'AgentFlow'
+      description: '由 AgentFlow 画布《AgentFlow》生成：6 个节点 / 5 层'
+      order: 50
+      plugins:
+        - id: persona
+          name: '@deepseek-ai/dsh-persona'
+          config:
+            prefix: |-
+              你是一个按固定流程组织子 agent 的调度者。
+
+              【你是谁】
+              你是「AgentFlow」。
+              这个流程共 6 个节点、5 层：大纲 → 对白版 / 下游卡片 → 人物版 → 合并 → 下游卡片。
+
+              【第一步：对齐需求】
+              动手前必须先把需求问清楚，最多问 3 个问题、一次问完：
+              - 这次的题材（主题）是什么？
+              - 期望的篇幅大概多少？
+              - 主要人物有哪些已有设定？
+              信息够了就说「开始执行」，不要边问边跑。
+
+              【流程】
+              第 1 层（串行）
+                ▸ 大纲 —— 根据给定的题材，写一个三幕剧的简要大纲，每幕两三句话用修仙类的。11
+                  完成标准：三幕结构清晰，每幕有一个明确转折.
+                  用模型：deepseek-flash
+                  参考技能：caveman、grill-me
+
+              第 2 层（并行，两个同时下发）
+                ▸ 对白版 —— 基于大纲，为关键场景写几句有张力的对白。
+                  完成标准：对白有潜台词，不要直白解释情绪
+                  用模型：deepseek-flash
+
+                ▸ 下游卡片
+                  完成标准：（未填写）
+                  用模型：deepseek-flash
+
+              第 3 层（等第 2 层全部完成）
+                ▸ 人物版 —— 基于大纲，塑造主要人物的动机与成长弧线。
+                  完成标准：主角有明确欲望、阻碍与转变
+                  用模型：deepseek-flash
+
+              第 4 层（等第 3 层全部完成）
+                ▸ 合并 —— 把两份材料合并成一份完整的三幕剧梗概，约 300 字。
+                  完成标准：读起来是一个连贯故事，不是拼接
+                  用模型：deepseek-flash
+
+              第 5 层（独立节点，可单独下发）
+                ▸ 下游卡片
+                  完成标准：（未填写）
+                  用模型：deepseek-flash
+
+              【怎么下发】
+              - 每个节点用一次 `subagent` 工具；prompt 里给全：任务 + 完成标准 + 上游产出
+              - 同一层的多个节点同时下发，不要一个个等
+              - 上游产出原样传给下游，不要自己改写或概括
+              - 子 agent 如果还有自己的子任务，把它的子任务一并写进它的 prompt，让它继续嵌套
+
+              【收尾】
+              全部跑完，把最终产出交给用户。中间有节点失败要说清楚是哪个、为什么，不要假装成功。
+        - id: agent-instructions
+          name: '@deepseek-ai/dsh-agent-instructions'
+          config:
+            maxBytes: 65536
+        - id: time-context
+          name: '@deepseek-ai/dsh-time-context'
+        - id: tool-bash
+          name: '@deepseek-ai/dsh-tool-bash'
+          disabled: !!js process.platform === 'win32'
+        - id: tool-pwsh
+          name: '@deepseek-ai/dsh-tool-pwsh'
+          disabled: !!js process.platform !== 'win32'
+        - id: tool-fs
+          name: '@deepseek-ai/dsh-tool-fs'
+        - id: tool-fs-search
+          name: '@deepseek-ai/dsh-tool-fs-search'
+          config:
+            sampleOverCapGlobResults: false
+        - id: tool-jobs
+          name: '@deepseek-ai/dsh-tool-jobs'
+        - id: tool-schedule
+          name: '@deepseek-ai/dsh-tool-schedule'
+        - id: skill-filesystem
+          name: '@deepseek-ai/dsh-skill-filesystem'
+        - id: tool-skill
+          name: '@deepseek-ai/dsh-tool-skill'
+        - id: command-goal
+          name: '@deepseek-ai/dsh-command-goal'
+        - id: tool-goal
+          name: '@deepseek-ai/dsh-tool-goal'
+        - id: planning
+          name: cordis:group
+          group: true
+          isolate:
+            planMode: true
+          config:
+            - id: plan-mode
+              name: '@deepseek-ai/dsh-plan-mode'
+              config:
+                section: |
+                  You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+                  Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+                  The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+                  Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+                  Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+                  When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+        - id: compaction
+          name: cordis:group
+          group: true
+          isolate:
+            compaction: true
+            toolResultPruner: true
+          config:
+            - id: compaction-basic
+              name: '@deepseek-ai/dsh-compaction-basic'
+            - id: command-compact
+              name: '@deepseek-ai/dsh-command-compact'
+            - id: tool-result-pruner
+              name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+              config:
+                thresholdChars: 8192
+                headChars: 4096
+                tailChars: 1024
+        - id: delegation
+          name: cordis:group
+          group: true
+          isolate:
+            workflowEngine: true
+          config:
+            - id: tool-subagent-control
+              name: '@deepseek-ai/dsh-tool-subagent-control'
+            - id: tool-subagent-list-agents
+              name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+            - id: tool-subagent
+              name: '@deepseek-ai/dsh-tool-subagent'
+              config:
+                provider: spawn
+                toolName: subagent
+                modelSelectionSettings: true
+            - id: tool-subagent-fork
+              name: '@deepseek-ai/dsh-tool-subagent'
+              config:
+                provider: fork
+                toolName: subagent_fork
+            - id: workflow-ptc
+              name: '@deepseek-ai/dsh-workflow-ptc'
+              config:
+                provider: spawn
+            - id: tool-workflow
+              name: '@deepseek-ai/dsh-tool-workflow'
+        - id: tool-ask-user
+          name: '@deepseek-ai/dsh-tool-ask-user'
+        - id: tool-todo
+          name: '@deepseek-ai/dsh-tool-todo'
+          config:
+            allowParallelInProgress: true
+        - id: tool-web
+          name: '@deepseek-ai/dsh-tool-web'
+          config:
+            fetch: false
+            searchTimeoutMs: 60000
+        - id: present
+          name: '@deepseek-ai/dsh-tool-present'
+        - id: tool-plugin-manager
+          name: '@deepseek-ai/dsh-plugin-manager/tools'
+          disabled: true
+        - id: tool-plugin-market
+          name: '@deepseek-ai/dsh-plugin-market/tools'
+          disabled: true
+# <<< AgentFlow 预设结束

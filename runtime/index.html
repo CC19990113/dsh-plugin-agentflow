@@ -1,0 +1,3299 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentFlow · 物料画布</title>
+<style>
+/* ==========================================================================
+   基础与浅色主题变量
+   用户明确要求浅色、绝不做深色，所以这里强制 color-scheme: light，
+   避免系统深色模式把 textarea / select 染黑。
+   ========================================================================== */
+:root {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --card: #ffffff;
+  --ink: #1f2430;
+  --muted: #7a8494;
+  --line: #e6e9ef;
+  --blue: #1565c0;
+  --blue-strong: #1976d2;
+  --green: #2e7d32;
+  --red: #c62828;
+  --gray: #9e9e9e;
+  --shadow: 0 2px 10px rgba(30, 40, 60, 0.08);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--ink);
+  background: var(--bg);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; }
+.hidden { display: none !important; }
+
+/* ---------- 通用按钮 ---------- */
+.btn {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #dfe3ea;
+  border-radius: 9px;
+  background: #fff;
+  color: #3c4658;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s, box-shadow .15s;
+  white-space: nowrap;
+}
+.btn:hover { background: #f2f6fd; border-color: #c9d9f5; color: var(--blue); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+.btn.primary {
+  background: var(--blue-strong);
+  border-color: var(--blue-strong);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(25, 118, 210, .22);
+}
+.btn.primary:hover { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn.danger { color: var(--red); border-color: #f2d4d4; }
+.btn.danger:hover { background: #fff5f5; border-color: #eab6b6; color: #b71c1c; }
+.btn.small { height: 28px; font-size: 13px; padding: 0 12px; margin-top: 10px; }
+
+/* ==========================================================================
+   顶栏
+   ========================================================================== */
+#topbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  background: rgba(255, 255, 255, .94);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  z-index: 100;
+}
+.brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.brand .logo {
+  width: 27px; height: 27px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: #e8f0fe;
+  color: var(--blue);
+  font-size: 15px;
+  flex: none;
+}
+.board-name {
+  font-weight: 600;
+  font-size: 15px;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.top-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.conn-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #c3c9d4;
+  display: inline-block;
+  flex: none;
+}
+.conn-dot.ok { background: #43a047; }
+.conn-dot.err { background: #e53935; }
+.mode-badge {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #fff8e1;
+  color: #a06a00;
+  border: 1px solid #ffe9b0;
+  white-space: nowrap;
+}
+.mode-badge.real { background: #e8f5e9; color: var(--green); border-color: #c6e7c9; }
+.mode-badge.off { background: #ffebee; color: var(--red); border-color: #ffd1d1; }
+
+/* ==========================================================================
+   无限画布
+   点阵网格铺在 #viewport 上，随 pan/zoom 更新 background-size/position；
+   所有卡片放在 #world 里，统一用 translate + scale 变换。
+   ========================================================================== */
+#viewport {
+  position: fixed;
+  top: 56px; left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+  background-color: var(--bg);
+  background-image: radial-gradient(circle at 1px 1px, #d2d8e1 1.1px, transparent 1.1px);
+  cursor: grab;
+}
+#viewport.panning { cursor: grabbing; }
+#viewport, .card-content { -webkit-user-select: none; user-select: none; }
+.card-content { -webkit-user-select: text; user-select: text; }
+
+#world {
+  position: absolute;
+  left: 0; top: 0;
+  width: 0; height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+#edges {
+  position: absolute;
+  left: 0; top: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+#edges path {
+  fill: none;
+  stroke: #c7cede;
+  stroke-width: 1.8;
+}
+#edges path.edge-hi { stroke: #64a0f0; stroke-width: 2.4; }
+#edges path.edge-bad { stroke: #e0a3a3; stroke-dasharray: 5 5; }
+
+/* ==========================================================================
+   物料卡片
+   左侧 3px 状态色条 + 标题行（图标 / 名字 / 状态角标 / + 按钮）
+   + 内容 textarea + 参数行。
+   ========================================================================== */
+.card {
+  position: absolute;
+  width: 320px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  z-index: 1;
+}
+.card.selected {
+  box-shadow: 0 0 0 2px rgba(74, 134, 232, .45), 0 8px 20px rgba(30, 60, 120, .14);
+}
+.card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: #d5d9e2;
+}
+.card[data-status="running"]::before { background: var(--blue-strong); }
+.card[data-status="done"]::before { background: #43a047; }
+.card[data-status="failed"]::before { background: #e53935; }
+.card[data-status="blocked"]::before { background: #bdbdbd; }
+
+/* running：蓝色呼吸动画 */
+.card[data-status="running"] {
+  animation: breathe 1.8s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(25, 118, 210, .10), 0 2px 10px rgba(30, 40, 60, .08); }
+  50%      { box-shadow: 0 0 0 7px rgba(25, 118, 210, .20), 0 2px 10px rgba(30, 40, 60, .08); }
+}
+/* blocked：灰色虚线卡片 */
+.card[data-status="blocked"] {
+  border-style: dashed;
+  border-color: #d9d9d9;
+  background: #fcfcfc;
+}
+.card.dragging { cursor: grabbing; }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px 2px 15px;
+}
+.card-icon {
+  width: 18px;
+  flex: none;
+  text-align: center;
+  font-size: 14px;
+  color: #5f6b80;
+}
+.card-label {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 状态角标：浅底深字 */
+.badge {
+  flex: none;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #f0f2f5;
+  color: #6b7280;
+  white-space: nowrap;
+}
+.card[data-status="done"] .badge { background: #e8f5e9; color: #2e7d32; }
+.card[data-status="running"] .badge { background: #e3f2fd; color: #1565c0; }
+.card[data-status="failed"] .badge { background: #ffebee; color: #c62828; }
+.card[data-status="blocked"] .badge { background: #eeeeee; color: #9e9e9e; }
+
+.icon-btn.add {
+  flex: none;
+  width: 24px; height: 24px;
+  padding: 0;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  background: #fff;
+  color: #5b6472;
+  font-size: 16px;
+  line-height: 21px;
+  text-align: center;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.icon-btn.add:hover { background: #eef4ff; border-color: #bcd3f5; color: var(--blue); }
+/* 左侧「+」= 添加上游，用绿色跟右侧区分 */
+.icon-btn.add.prev { color: #9aa3b2; }
+.icon-btn.add.prev:hover { background: #eef7ee; border-color: #bfe0bf; color: #2e7d32; }
+
+/* 内容区：正文 15px / 1.65 行距，高度由 JS 自适应 */
+.card-content {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  max-height: 460px;
+  padding: 4px 14px 6px 15px;
+  border: none;
+  background: transparent;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.65;
+  color: #2a3140;
+  overflow: hidden;
+}
+.card-content:focus { background: #fafcff; }
+.card-content::placeholder { color: #aeb6c4; }
+
+/* 参数行：13px */
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 14px 10px 15px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.card-error {
+  margin: 0 12px 10px 15px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #fff5f5;
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   空画布引导
+   ========================================================================== */
+.empty-state {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(430px, calc(100vw - 48px));
+  padding: 32px 40px 28px;
+  text-align: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 12px 32px rgba(20, 30, 50, .08);
+  z-index: 5;
+}
+.empty-icon { font-size: 30px; line-height: 1; color: #8fb4ea; margin-bottom: 8px; }
+.empty-state h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+.empty-state p { margin: 0 0 18px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+.empty-hint { margin-top: 12px; font-size: 13px; color: #9aa3b1; }
+.empty-hint.err { color: var(--red); }
+
+/* ==========================================================================
+   缩放控件（左下）
+   ========================================================================== */
+.zoom-box {
+  position: fixed;
+  left: 18px; bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  box-shadow: 0 4px 14px rgba(20, 30, 50, .08);
+  z-index: 40;
+}
+.zoom-box button {
+  height: 30px;
+  min-width: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: #43506a;
+  font-size: 15px;
+  cursor: pointer;
+}
+.zoom-box button:hover { background: #eef4ff; color: var(--blue); }
+#zoomPct { width: 56px; font-size: 13px; }
+
+/* ==========================================================================
+   底部浮动设置面板
+   ========================================================================== */
+#panel {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  width: min(800px, calc(100vw - 36px));
+  max-height: calc(100vh - 92px);
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(20, 30, 50, .16);
+  z-index: 50;
+}
+.panel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.panel-title { font-size: 14px; font-weight: 600; }
+.panel-id { font-size: 12px; color: #a0a8b6; }
+.panel-status {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: #f0f2f5;
+  color: #6b7280;
+}
+.panel-status[data-status="done"] { background: #e8f5e9; color: #2e7d32; }
+.panel-status[data-status="running"] { background: #e3f2fd; color: #1565c0; }
+.panel-status[data-status="failed"] { background: #ffebee; color: #c62828; }
+.panel-status[data-status="blocked"] { background: #eeeeee; color: #9e9e9e; }
+
+.panel-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+.field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+.field > span { font-size: 12px; color: #8a93a3; }
+.field.grow { flex: 1; min-width: 190px; }
+.field.grow input { width: 100%; }
+.field select { width: 180px; }
+/* 面板里的「上游」多选：独占一行，限制高度 */
+.panel-up { margin-top: 12px; }
+.panel-up select { width: 100%; max-width: 460px; height: auto; padding: 4px; }
+.panel-up select option { padding: 3px 6px; border-radius: 6px; }
+.panel-actions { display: flex; gap: 8px; margin-left: auto; }
+
+input[type="text"], input[type="password"], select, textarea {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: #fbfcfe;
+  border: 1px solid #e2e6ee;
+  border-radius: 9px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+input[type="text"]:focus, input[type="password"]:focus, select:focus, textarea:focus {
+  background: #fff;
+  border-color: #7aa7f8;
+  box-shadow: 0 0 0 3px rgba(100, 160, 240, .15);
+}
+#fTask, #fCriteria { width: 100%; min-height: 58px; resize: vertical; }
+.panel-close {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #8a93a3;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.panel-close:hover { background: #f0f2f5; color: #3c4658; }
+
+/* ==========================================================================
+   设置弹窗
+   ========================================================================== */
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(28, 36, 52, .32);
+  z-index: 200;
+}
+.modal-card {
+  width: min(480px, calc(100vw - 40px));
+  padding: 20px 22px 18px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(15, 25, 45, .25);
+}
+.modal-head { display: flex; align-items: center; margin-bottom: 14px; }
+.modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.modal-close {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #8a93a3;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.modal-close:hover { background: #f0f2f5; color: #3c4658; }
+.form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 13px; color: #5f6b80; }
+.form-row > span:first-child { font-weight: 500; color: #4a5568; }
+.form-row input, .form-row textarea { width: 100%; }
+.form-row textarea { resize: vertical; line-height: 1.65; }
+.form-hint { font-size: 12px; color: #98a1b0; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.modal-card { max-height: 86vh; overflow-y: auto; }
+
+/* mock 开关 */
+.mock-row { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
+.mock-row input { width: auto; margin: 0; }
+.mock-row span { font-weight: 500; color: #4a5568; }
+
+/* provider 逐项编辑（实际后端的配置形态） */
+.provider-tip { margin: -2px 0 10px; }
+.provider-row {
+  margin-bottom: 10px;
+  padding: 9px 12px 11px;
+  background: #fcfdff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.provider-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #3c4658;
+}
+.provider-head .key-state {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  color: #98a1b0;
+}
+.provider-fields { display: grid; grid-template-columns: 1fr 1.3fr; gap: 8px; }
+.provider-fields .field { font-size: 12px; }
+.provider-fields .field.full { grid-column: 1 / -1; }
+.provider-fields .field > span { font-size: 11px; }
+.provider-fields input { width: 100%; }
+
+/* ==========================================================================
+   结果判断（底部面板单选）
+   ========================================================================== */
+.verify-field { margin-top: 12px; }
+.verify-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.verify-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px 8px;
+  border: 1px solid #e2e6ee;
+  border-radius: 9px;
+  background: #fbfcfe;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.verify-opt:hover { background: #f4f8ff; border-color: #c9d9f5; }
+.verify-opt.on { background: #eef4ff; border-color: #9fc0f3; }
+.verify-head { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #3c4658; }
+.verify-head input { margin: 0; accent-color: var(--blue); flex: none; }
+.verify-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.verify-desc { font-size: 11px; line-height: 1.45; color: #98a1b0; }
+
+/* ==========================================================================
+   技能 / 工具复选框列表（底部面板）
+   原生 checkbox，每项一行；工具按 MCP server 分组，列表最高 180px。
+   ========================================================================== */
+.panel-multi-grid { margin-top: 12px; }
+.check-list {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 4px;
+  background: #fbfcfe;
+  border: 1px solid #e2e6ee;
+  border-radius: 9px;
+}
+.check-list:focus-within { border-color: #7aa7f8; box-shadow: 0 0 0 3px rgba(100, 160, 240, .12); }
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #3c4658;
+}
+.check-item:hover { background: #f0f5ff; }
+.check-item:has(input:checked) { background: #e8f0fe; }
+.check-item input { margin: 0; flex: none; accent-color: var(--blue); }
+.check-name {
+  flex: none;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #3c4658;
+}
+.check-sep { flex: none; font-size: 12px; color: #b8c0cc; }
+.check-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #98a1b0;
+}
+.check-group + .check-group { margin-top: 4px; padding-top: 4px; border-top: 1px dashed #e9edf3; }
+.check-group-head {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  background: #f4f6fa;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5f6b80;
+}
+.check-group-head .mcp-dot { width: 7px; height: 7px; }
+.check-group-count { margin-left: auto; font-weight: 400; font-size: 11px; color: #98a1b0; }
+.check-empty { padding: 10px 8px; font-size: 12px; line-height: 1.6; color: #98a1b0; text-align: center; }
+.check-empty.err { color: var(--red); }
+.field-note { font-size: 12px; line-height: 1.5; color: #98a1b0; }
+.field-note.err { color: var(--red); cursor: pointer; }
+
+/* 待人工确认（status=review）时的面板底部按钮 */
+.panel-verify {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #ffe0b2;
+}
+.panel-verify-tip { margin-right: auto; font-size: 12px; color: #b26a00; }
+
+/* 卡片上的判定结果行 */
+.card-verdict {
+  padding: 0 14px 8px 15px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.card-verdict.pass { color: var(--green); }
+.card-verdict.fail { color: var(--red); }
+
+/* 新增状态 review：待人工确认（橙色） */
+.card[data-status="review"]::before { background: #ef6c00; }
+.card[data-status="review"] .badge { background: #fff8e1; color: #ef6c00; }
+.panel-status[data-status="review"] { background: #fff8e1; color: #ef6c00; }
+
+/* ==========================================================================
+   MCP 服务器列表（设置弹窗）
+   ========================================================================== */
+.mcp-block { margin: 4px 0 14px; }
+.mcp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.mcp-head .mcp-title { font-size: 13px; font-weight: 600; color: #4a5568; }
+.mcp-head .btn.small { margin: 0 0 0 auto; }
+.mcp-list { display: flex; flex-direction: column; gap: 6px; max-height: 230px; overflow-y: auto; }
+.mcp-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fcfdff;
+  overflow: hidden;
+}
+.mcp-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.mcp-row-head:hover { background: #f4f8ff; }
+.mcp-dot { width: 8px; height: 8px; border-radius: 50%; background: #c3c9d4; flex: none; }
+.mcp-dot.ok { background: #43a047; }
+.mcp-dot.bad { background: #e53935; }
+.mcp-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #3c4658;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mcp-count { margin-left: auto; font-size: 12px; color: #98a1b0; white-space: nowrap; flex: none; }
+.mcp-caret { font-size: 11px; color: #a0a8b6; transition: transform .15s; flex: none; }
+.mcp-caret.open { transform: rotate(180deg); }
+.mcp-tools { padding: 4px 12px 9px; border-top: 1px dashed #e9edf3; }
+.mcp-tool { padding: 4px 0; font-size: 13px; line-height: 1.5; }
+.mcp-tool-name {
+  color: #3c4658;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.mcp-tool-desc { display: block; font-size: 12px; color: #98a1b0; line-height: 1.5; }
+.mcp-err { padding: 2px 12px 9px; font-size: 12px; line-height: 1.55; color: var(--red); word-break: break-all; }
+.mcp-msg { padding: 2px 0; font-size: 12px; line-height: 1.55; color: #98a1b0; word-break: break-all; }
+.mcp-msg.err { color: var(--red); }
+.mcp-add { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e9edf3; }
+.mcp-add summary { font-size: 13px; color: var(--blue); cursor: pointer; outline: none; }
+.mcp-add-fields { margin-top: 8px; }
+.mcp-add-fields .form-row { margin-bottom: 8px; }
+.mcp-add-foot { display: flex; align-items: center; gap: 8px; }
+.mcp-add-foot .form-hint { margin-right: auto; }
+.mcp-add-foot .btn.small { margin-top: 0; }
+
+/* ==========================================================================
+   轻提示（所有 fetch 失败都会在这里露出）
+   ========================================================================== */
+#toasts {
+  position: fixed;
+  top: 68px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  z-index: 300;
+  pointer-events: none;
+}
+.toast {
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 9px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(20, 30, 50, .14);
+  font-size: 14px;
+  line-height: 1.55;
+  color: #333c4d;
+  pointer-events: auto;
+  animation: toast-in .18s ease-out;
+  transition: opacity .25s;
+}
+.toast.error { border-left-color: #e53935; background: #fffafa; color: #a12622; }
+.toast.warn { border-left-color: #f0a020; background: #fffdf7; color: #8a5a00; }
+.toast.ok { border-left-color: #43a047; background: #fafffa; color: #236b28; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ====================== 顶栏 ====================== -->
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <span class="board-name" id="boardName">物料画布</span>
+  </div>
+  <div class="top-actions">
+    <span class="conn-dot" id="connDot" title="后端连接状态"></span>
+    <span class="mode-badge" id="modeBadge">连接中…</span>
+    <button class="btn primary" id="btnRun">▶ 跑全图</button>
+    <button class="btn" id="btnSettings">设置</button>
+  </div>
+</header>
+
+<!-- ====================== 画布 ====================== -->
+<main id="viewport">
+  <div id="world">
+    <!-- 连线画在卡片下层 -->
+    <svg id="edges" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+
+  <!-- 空画布引导 -->
+  <div id="empty" class="empty-state">
+    <div class="empty-icon">▦</div>
+    <h2>画布还是空的</h2>
+    <p>每个节点是一张可编辑的产物卡片。<br>拖空白平移，滚轮缩放，卡片可以单独重跑。</p>
+    <button class="btn primary" id="btnFirstNode">＋ 新建第一个节点</button>
+    <div class="empty-hint" id="emptyHint">正在连接后端…</div>
+    <button class="btn small hidden" id="btnRetry">重试连接</button>
+  </div>
+</main>
+
+<!-- ====================== 缩放控件 ====================== -->
+<div class="zoom-box">
+  <button id="zoomOut" title="缩小">−</button>
+  <button id="zoomReset" title="重置为 100%"><span id="zoomPct">100%</span></button>
+  <button id="zoomIn" title="放大">＋</button>
+</div>
+
+<!-- ====================== 底部选中卡片面板 ====================== -->
+<section id="panel" class="hidden" aria-label="卡片设置">
+  <div class="panel-head">
+    <span class="panel-title">卡片设置</span>
+    <span class="panel-status" id="panelStatus" data-status="idle">空闲</span>
+    <span class="panel-id" id="panelId"></span>
+    <button class="panel-close" id="btnPanelClose" title="关闭">×</button>
+  </div>
+  <div class="panel-row">
+    <label class="field grow">
+      <span>名字 label</span>
+      <input id="fLabel" type="text" placeholder="给这张卡片起个名">
+    </label>
+    <label class="field">
+      <span>模型 model</span>
+      <select id="fModel"></select>
+    </label>
+    <div class="panel-actions">
+      <button class="btn" id="btnRerun">↻ 重跑此卡</button>
+      <button class="btn danger" id="btnDelete">删除</button>
+    </div>
+  </div>
+  <div class="panel-grid">
+    <label class="field">
+      <span>任务 task</span>
+      <textarea id="fTask" placeholder="这张卡要做什么"></textarea>
+    </label>
+    <label class="field">
+      <span>标准 criteria</span>
+      <textarea id="fCriteria" placeholder="做到什么程度算完成"></textarea>
+    </label>
+  </div>
+  <!-- 结果判断：跑完后谁来判定是否达标 -->
+  <div class="field verify-field">
+    <span>结果判断</span>
+    <div class="verify-options" id="verifyOptions">
+      <label class="verify-opt">
+        <span class="verify-head">
+          <input type="radio" name="verify" value="">
+          <span class="verify-title">不校验</span>
+        </span>
+        <span class="verify-desc">跑完直接出结果</span>
+      </label>
+      <label class="verify-opt">
+        <span class="verify-head">
+          <input type="radio" name="verify" value="human">
+          <span class="verify-title">人工</span>
+        </span>
+        <span class="verify-desc">跑完停住，等你点通过</span>
+      </label>
+      <label class="verify-opt">
+        <span class="verify-head">
+          <input type="radio" name="verify" value="jev">
+          <span class="verify-title">jev</span>
+        </span>
+        <span class="verify-desc">调 TypeSafe 判定工具打分</span>
+      </label>
+      <label class="verify-opt">
+        <span class="verify-head">
+          <input type="radio" name="verify" value="self">
+          <span class="verify-title">模型自行判断</span>
+        </span>
+        <span class="verify-desc">同一个模型自评是否达标</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- 技能 / 工具：复选框列表，勾选即 PATCH（工具按 MCP server 分组） -->
+  <div class="panel-grid panel-multi-grid">
+    <div class="field panel-multi">
+      <span>技能 skills（勾选即挂到这张卡）</span>
+      <div class="check-list" id="skillList" role="group" aria-label="技能"></div>
+      <span class="field-note" id="skillsHint">正在读取技能…</span>
+    </div>
+    <div class="field panel-multi">
+      <span>工具 tools（MCP 工具，按服务器分组）</span>
+      <div class="check-list" id="toolList" role="group" aria-label="工具"></div>
+      <span class="field-note" id="toolsHint">正在读取 MCP…</span>
+    </div>
+  </div>
+  <label class="field panel-up">
+    <span>上游 input（勾中的卡片会把内容喂给它，可多选；会成环的不让选）</span>
+    <select id="fUp" multiple size="3"></select>
+  </label>
+  <!-- 待人工确认时才显示 -->
+  <div class="panel-verify hidden" id="verifyActions">
+    <span class="panel-verify-tip">这张卡在等人工确认</span>
+    <button class="btn primary" type="button" id="btnVerifyPass">✓ 通过</button>
+    <button class="btn danger" type="button" id="btnVerifyFail">↻ 打回重跑</button>
+  </div>
+</section>
+
+<!-- ====================== 设置弹窗 ====================== -->
+<div id="modal" class="modal hidden">
+  <form class="modal-card" id="settingsForm" role="dialog" aria-modal="true" aria-label="设置">
+    <div class="modal-head">
+      <h3>设置</h3>
+      <button class="modal-close" id="btnModalClose" title="关闭">×</button>
+    </div>
+    <label class="form-row mock-row">
+      <input id="cfgMock" type="checkbox">
+      <span>mock 模式（不真正调用模型，只返回假输出）</span>
+    </label>
+
+    <!-- 实际后端：按 provider 编辑 baseURL / model / apiKey -->
+    <div id="providerBlock" class="hidden">
+      <div class="form-hint provider-tip">apiKey 留空表示不修改已保存的值；模型下拉框里每一项就是一个 provider。</div>
+      <div id="providerRows"></div>
+    </div>
+
+    <!-- 契约形态：单一 baseURL + 模型列表 -->
+    <div id="simpleBlock" class="hidden">
+      <label class="form-row">
+        <span>baseURL</span>
+        <input id="cfgBase" type="text" placeholder="https://api.deepseek.com/v1">
+        <span class="form-hint">OpenAI 兼容接口地址，末尾不要带 /chat/completions</span>
+      </label>
+      <label class="form-row">
+        <span>apiKey</span>
+        <input id="cfgKey" type="password" placeholder="留空则保持已保存的 key 不变" autocomplete="off">
+        <span class="form-hint">只发给本机后端，不会出现在页面源码里</span>
+      </label>
+      <label class="form-row">
+        <span>模型列表</span>
+        <textarea id="cfgModels" rows="3" placeholder="每行一个，例如 deepseek-chat"></textarea>
+        <span class="form-hint">用于卡片上的模型下拉框</span>
+      </label>
+    </div>
+
+    <!-- MCP 服务器：状态 + 工具列表 + 添加 stdio server -->
+    <div class="mcp-block" id="mcpBlock">
+      <div class="mcp-head">
+        <span class="mcp-title">MCP 服务器</span>
+        <button class="btn small" type="button" id="btnMcpRefresh">↻ 刷新</button>
+      </div>
+      <div class="mcp-list" id="mcpList"></div>
+      <div class="mcp-msg" id="mcpMsg">正在读取…</div>
+      <details class="mcp-add">
+        <summary>＋ 添加 stdio server</summary>
+        <div class="mcp-add-fields">
+          <label class="form-row">
+            <span>name</span>
+            <input id="mcpName" type="text" placeholder="例如 chrome-devtools-mcp" autocomplete="off">
+          </label>
+          <label class="form-row">
+            <span>command</span>
+            <input id="mcpCommand" type="text" value="/usr/local/bin/node" placeholder="/usr/local/bin/node">
+          </label>
+          <label class="form-row">
+            <span>args（一行一个）</span>
+            <textarea id="mcpArgs" rows="3" placeholder="/path/to/server.js"></textarea>
+          </label>
+          <div class="mcp-add-foot">
+            <span class="form-hint" id="mcpAddHint">添加后会自动重新读取 MCP 状态</span>
+            <button class="btn small" type="button" id="btnMcpAdd">添加</button>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="form-hint" id="cfgMockHint"></div>
+    <div class="modal-foot">
+      <button class="btn" type="button" id="btnCancelCfg">取消</button>
+      <button class="btn primary" type="button" id="btnSaveCfg">保存</button>
+    </div>
+  </form>
+</div>
+
+<!-- ====================== 轻提示 ====================== -->
+<div id="toasts"></div>
+
+<noscript>
+  <div style="position:fixed;inset:0;display:grid;place-items:center;background:#fff;color:#c62828;font-size:16px;">
+    这个页面需要启用 JavaScript 才能显示画布。
+  </div>
+</noscript>
+
+<script>
+/* ==========================================================================
+   AgentFlow 物料画布 —— 单文件前端，零依赖。
+   设计原则：节点不是流程步骤，而是一份一直摆在画布上的产物卡片；
+   内容可看、可改、可单独重跑、可派生下一张。
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  /* ------------------------------ 常量 ------------------------------ */
+  var CARD_W = 320;              // 卡片宽度（和 CSS 保持一致）
+  var MIN_SCALE = 0.3;           // 最小缩放
+  var MAX_SCALE = 2.5;           // 最大缩放
+  var GRID_BASE = 24;            // 点阵基础间距
+  var DEFAULT_MODELS = ['deepseek-chat', 'qwen-max', 'glm-4'];
+  var TYPE_ICONS = { llm: '✦', mcp: '⚙', judge: '⚖', human: '👤', report: '📋' };
+  var STATUS_TEXT = { idle: '空闲', running: '运行中', done: '完成', failed: '失败', blocked: '阻塞', review: '待确认' };
+  var STATUS_SET = { idle: 1, running: 1, done: 1, failed: 1, blocked: 1, review: 1 };
+
+  // ?demo=1：无后端时的本地演示数据，方便调试布局（真实使用不会走这里）
+  var DEMO = new URLSearchParams(location.search).has('demo');
+
+  /* ------------------------------ 演示数据 ------------------------------ */
+  var DEMO_BOARD = {
+    id: 'demo',
+    name: 'AgentFlow · demo',
+    nodes: [
+      {
+        id: 'brief', label: '剧本梗概', type: 'llm', x: 80, y: 150,
+        model: 'qwen-max', task: '扩写三幕剧本梗概', criteria: '三幕各有成长弧线',
+        content: '第一幕：主角在雨夜捡到一只会说话的猫，猫自称能实现一个愿望。\n\n第二幕：猫其实是三年前走失的搭档，愿望早就用掉了——用在主角身上。',
+        status: 'done', usage: { total_tokens: 1284, ms: 2100 }
+      },
+      {
+        id: 'person', label: '人物弧光', type: 'llm', x: 470, y: 50,
+        model: 'deepseek-chat', task: '优化人物弧光', criteria: '三幕各有成长弧线',
+        content: '', status: 'running', usage: {}
+      },
+      {
+        id: 'scene', label: '场景清单', type: 'llm', x: 470, y: 330,
+        model: 'glm-4', task: '列出关键场景', criteria: '至少 8 个可拍场景',
+        content: '1. 雨夜巷口\n2. 旧书店\n3. 天台', status: 'blocked',
+        error: '被阻塞：上游节点失败', usage: {}
+      },
+      {
+        id: 'review', label: '终稿审阅', type: 'human', x: 860, y: 170,
+        model: '', task: '人审终稿', criteria: '节奏不拖',
+        content: '', status: 'idle', usage: {}
+      }
+    ],
+    edges: [
+      { from: 'brief', to: 'person' },
+      { from: 'brief', to: 'scene' },
+      { from: 'person', to: 'review' },
+      { from: 'scene', to: 'review' }
+    ]
+  };
+
+  /* ------------------------------ 状态 ------------------------------ */
+  var state = {
+    board: { id: 'board', name: '物料画布', nodes: [], edges: [] },
+    // providers 为实际后端的结构（deepseek/qwen/glm 各一套）；也兼容契约里的 baseURL+models
+    config: { baseURL: '', models: [], providers: null, mock: true },
+    view: { x: 80, y: 64, s: 1 },
+    selectedId: null,
+    running: false,
+    connected: false,
+    runEnded: false,          // 本轮是否收到 run:end（用来识别事件流提前中断）
+    cards: new Map(),           // nodeId -> 卡片 DOM 引用
+    patchBuffers: new Map(),    // nodeId -> { data, timer }
+    persistTimer: null,
+    demoSeq: 0,
+    // 技能 / MCP 接口状态：idle | loading | ok | error
+    skills: [],                 // [{ name, description }]
+    skillsStatus: 'idle',
+    skillsError: '',
+    mcpServers: [],             // [{ name, ok, error, tools: [{ name, description }] }]
+    mcpStatus: 'idle',
+    mcpError: '',
+    mcpOpen: {},                // serverName -> 工具列表是否展开
+    mcpSpecs: {},               // 本地已知的 mcpServers 配置，保存设置时带回去避免被覆盖
+    skillsLoading: false,       // 防止启动 / 重试 / 手动刷新同时打接口
+    mcpLoading: false
+  };
+
+  /* ------------------------------ 小工具 ------------------------------ */
+  function $(sel) { return document.querySelector(sel); }
+
+  // 创建 DOM 元素的小助手，避免到处 innerHTML（用户输入一律 textContent，防 XSS）
+  function make(tag, props, children) {
+    var el = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (key) {
+      var value = props[key];
+      if (key === 'class') el.className = value;
+      else if (key === 'text') el.textContent = value;
+      else if (key === 'style') Object.assign(el.style, value);
+      else if (key.indexOf('on') === 0 && typeof value === 'function') {
+        el.addEventListener(key.slice(2).toLowerCase(), value);
+      } else if (value !== null && value !== undefined) {
+        el.setAttribute(key, value);
+      }
+    });
+    (children || []).forEach(function (child) { el.appendChild(child); });
+    return el;
+  }
+
+  function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
+
+  function fmtNum(n) {
+    var num = Number(n);
+    if (!isFinite(num)) return '0';
+    return num.toLocaleString('zh-CN');
+  }
+
+  function fmtMs(ms) {
+    var num = Number(ms);
+    if (!isFinite(num) || num <= 0) return '';
+    return num >= 1000 ? (num / 1000).toFixed(1) + 's' : Math.round(num) + 'ms';
+  }
+
+  // usage 可能来自两种命名：camelCase（实际后端）或 snake_case（契约）
+  function usageTokens(usage) {
+    if (!usage || typeof usage !== 'object') return 0;
+    var total = Number(usage.total_tokens !== undefined ? usage.total_tokens : usage.totalTokens);
+    if (isFinite(total)) return total;
+    var p = Number(usage.promptTokens !== undefined ? usage.promptTokens : usage.prompt_tokens) || 0;
+    var c = Number(usage.completionTokens !== undefined ? usage.completionTokens : usage.completion_tokens) || 0;
+    return p + c;
+  }
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  function getNode(id) {
+    if (id === null || id === undefined) return null;
+    for (var i = 0; i < state.board.nodes.length; i++) {
+      if (state.board.nodes[i].id === id) return state.board.nodes[i];
+    }
+    return null;
+  }
+
+  /* ------------------------------ 轻提示 ------------------------------ */
+  // 所有请求失败都必须走到这里，界面上能看见，不能静默。
+  function toast(message, kind) {
+    var box = $('#toasts');
+    if (!box) return;
+    var item = make('div', { class: 'toast ' + (kind || 'info'), text: String(message) });
+    box.appendChild(item);
+    setTimeout(function () {
+      item.style.opacity = '0';
+      setTimeout(function () { item.remove(); }, 260);
+    }, kind === 'error' ? 5200 : 3200);
+  }
+
+  /* ------------------------------ 连接状态 ------------------------------ */
+  function setConn(ok, message) {
+    state.connected = !!ok;
+    var dot = $('#connDot');
+    if (dot) {
+      dot.className = 'conn-dot ' + (ok ? 'ok' : 'err');
+      dot.title = message || (ok ? '后端已连接' : '后端未连接');
+    }
+    var hint = $('#emptyHint');
+    var retry = $('#btnRetry');
+    if (!hint || !retry) return;
+    if (ok) {
+      hint.textContent = DEMO ? '演示模式：未连接后端，改动不落盘' : '已连接后端';
+      hint.classList.remove('err');
+      retry.classList.add('hidden');
+    } else {
+      hint.textContent = '后端未就绪：' + (message || '连接失败');
+      hint.classList.add('err');
+      retry.classList.remove('hidden');
+    }
+  }
+
+  function renderModeBadge(offline) {
+    var badge = $('#modeBadge');
+    if (!badge) return;
+    if (offline) {
+      badge.textContent = '未连接';
+      badge.className = 'mode-badge off';
+      badge.title = '读取后端配置失败';
+      return;
+    }
+    if (DEMO) {
+      badge.textContent = 'demo 模式';
+      badge.className = 'mode-badge';
+      badge.title = '本地演示数据，未连接后端';
+      return;
+    }
+    badge.textContent = state.config.mock ? 'mock 模式' : 'real 模式';
+    badge.className = 'mode-badge' + (state.config.mock ? '' : ' real');
+    badge.title = state.config.mock
+      ? '当前为 mock 模式：不真正调用模型'
+      : '当前为 real 模式：会调用真实模型接口';
+  }
+
+  /* ------------------------------ 请求封装 ------------------------------ */
+  // 统一处理 JSON、错误文本、非 JSON 响应；调用方一律 try/catch。
+  async function api(path, options) {
+    var opts = Object.assign({}, options || {});
+    if (opts.body && typeof opts.body !== 'string') {
+      opts.body = JSON.stringify(opts.body);
+    }
+    opts.headers = Object.assign({}, opts.headers || {});
+    if (opts.body) opts.headers['content-type'] = 'application/json';
+
+    var res = await fetch(path, opts);
+    if (!res.ok) {
+      var detail = '';
+      try { detail = (await res.text()).slice(0, 240); } catch (err) { detail = ''; }
+      throw new Error((opts.method || 'GET') + ' ' + path + ' → ' + res.status +
+        (detail ? ' · ' + detail : ''));
+    }
+    var ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (ct.indexOf('application/json') !== -1) return res.json();
+    return res.text();
+  }
+
+  /* ------------------------------ 数据归一化 ------------------------------ */
+  // verdict 可能来自 board，也可能来自运行事件；字段不合法就当作没有
+  function normalizeVerdict(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    if (typeof raw.pass !== 'boolean') return null;
+    return {
+      by: raw.by === 'human' || raw.by === 'jev' || raw.by === 'self' ? raw.by : '',
+      pass: raw.pass,
+      reason: typeof raw.reason === 'string' ? raw.reason : '',
+      at: isFinite(Number(raw.at)) ? Number(raw.at) : 0
+    };
+  }
+
+  function normalizeNode(raw) {
+    if (!raw || raw.id === null || raw.id === undefined) return null;
+    var id = String(raw.id);
+    return {
+      id: id,
+      label: raw.label || id,
+      type: raw.type || 'llm',
+      x: isFinite(Number(raw.x)) ? Number(raw.x) : 0,
+      y: isFinite(Number(raw.y)) ? Number(raw.y) : 0,
+      model: raw.model || '',
+      fallback: Array.isArray(raw.fallback) ? raw.fallback : [],
+      // 新字段：老数据没有这些字段时按默认值处理，不能报错
+      skills: Array.isArray(raw.skills)
+        ? raw.skills.filter(function (s) { return typeof s === 'string'; })
+        : [],
+      tools: Array.isArray(raw.tools)
+        ? raw.tools.filter(function (t) { return typeof t === 'string'; })
+        : [],
+      verify: raw.verify === 'human' || raw.verify === 'jev' || raw.verify === 'self'
+        ? raw.verify
+        : '',
+      task: raw.task || '',
+      criteria: raw.criteria || '',
+      content: typeof raw.content === 'string' ? raw.content : '',
+      status: STATUS_SET[raw.status] ? raw.status : 'idle',
+      usage: raw.usage && typeof raw.usage === 'object' ? raw.usage : {},
+      error: typeof raw.error === 'string' ? raw.error : '',
+      usedModel: typeof raw.usedModel === 'string'
+        ? raw.usedModel
+        : (raw.usage && typeof raw.usage.model === 'string' ? raw.usage.model : ''),
+      verdict: normalizeVerdict(raw.verdict)
+    };
+  }
+
+  function normalizeBoard(raw) {
+    var b = raw && typeof raw === 'object' ? raw : {};
+    var rawNodes = Array.isArray(b.nodes) ? b.nodes : [];
+    var rawEdges = Array.isArray(b.edges) ? b.edges : [];
+    var seen = {};
+    var nodes = [];
+    rawNodes.forEach(function (n) {
+      var node = normalizeNode(n);
+      if (!node || seen[node.id]) return;
+      seen[node.id] = true;
+      nodes.push(node);
+    });
+    var edges = [];
+    var edgeSeen = {};
+    rawEdges.forEach(function (e) {
+      if (!e || e.from === undefined || e.to === undefined) return;
+      var from = String(e.from);
+      var to = String(e.to);
+      if (!seen[from] || !seen[to]) return;
+      var key = from + '->' + to;
+      if (edgeSeen[key]) return;
+      edgeSeen[key] = true;
+      edges.push({ from: from, to: to });
+    });
+    return {
+      id: b.id ? String(b.id) : 'board',
+      name: b.name || '物料画布',
+      nodes: nodes,
+      edges: edges
+    };
+  }
+
+  /* ------------------------------ 加载数据 ------------------------------ */
+  // 配置有两种形态：
+  //   a) 实际后端：{ mock, providers: { deepseek: {label, baseURL, model, hasKey}, ... } }
+  //   b) 契约形态：{ baseURL, models: [], mock }
+  // 这里统一成内部结构，设置弹窗按有没有 providers 走两套表单。
+  function normalizeConfig(raw) {
+    var c = { baseURL: '', models: [], providers: null, mock: !!(raw && raw.mock), mcpServers: null };
+    // 后端可能把 mcpServers 一起回传（GET /api/config），拿到来用于保存时回写
+    if (raw && raw.mcpServers && typeof raw.mcpServers === 'object') {
+      c.mcpServers = raw.mcpServers;
+    }
+    if (raw && raw.providers && typeof raw.providers === 'object') {
+      c.providers = {};
+      Object.keys(raw.providers).forEach(function (name) {
+        var p = raw.providers[name] || {};
+        c.providers[name] = {
+          label: p.label || name,
+          baseURL: p.baseURL || '',
+          model: p.model || '',
+          hasKey: !!p.hasKey
+        };
+      });
+      c.models = Object.keys(c.providers);
+      var first = c.models[0];
+      c.baseURL = first ? c.providers[first].baseURL : '';
+    } else if (raw) {
+      c.baseURL = raw.baseURL || '';
+      c.models = Array.isArray(raw.models) ? raw.models : [];
+    }
+    return c;
+  }
+
+  async function loadConfig() {
+    if (DEMO) {
+      state.config = {
+        baseURL: 'https://api.deepseek.com/v1',
+        models: DEFAULT_MODELS.slice(),
+        providers: null,
+        mock: true
+      };
+      renderModeBadge();
+      return;
+    }
+    try {
+      var cfg = await api('/api/config');
+      state.config = normalizeConfig(cfg);
+      if (state.config.mcpServers) state.mcpSpecs = state.config.mcpServers;
+      renderModeBadge();
+    } catch (err) {
+      // 配置读不到时只降级显示，具体错误由画布加载那条 toast 负责
+      renderModeBadge(true);
+    }
+  }
+
+  async function loadBoard() {
+    if (DEMO) {
+      state.board = normalizeBoard(DEMO_BOARD);
+      setConn(true, '演示模式');
+      renderBoard();
+      return;
+    }
+    try {
+      var raw = await api('/api/board');
+      state.board = normalizeBoard(raw);
+      setConn(true, '已连接');
+      renderBoard();
+    } catch (err) {
+      setConn(false, err.message);
+      toast('读取画布失败：' + err.message, 'error');
+      renderBoard();
+    }
+  }
+
+  /* ------------------------------ 视图变换 ------------------------------ */
+  function applyView() {
+    var world = $('#world');
+    if (world) {
+      world.style.transform = 'translate(' + state.view.x + 'px, ' + state.view.y + 'px) scale(' + state.view.s + ')';
+    }
+    // 点阵网格随缩放调整密度：屏幕间距尽量保持在 16~60px
+    var step = GRID_BASE;
+    while (step * state.view.s < 16) step *= 2;
+    while (step * state.view.s > 60) step /= 2;
+    var size = step * state.view.s;
+    var vp = $('#viewport');
+    if (vp) {
+      vp.style.backgroundSize = size + 'px ' + size + 'px';
+      vp.style.backgroundPosition = state.view.x + 'px ' + state.view.y + 'px';
+    }
+    var pct = $('#zoomPct');
+    if (pct) pct.textContent = Math.round(state.view.s * 100) + '%';
+  }
+
+  // 以视口内某点为锚缩放（anchorX/anchorY 是相对 viewport 的像素）
+  function setZoom(nextScale, anchorX, anchorY) {
+    var s = clamp(nextScale, MIN_SCALE, MAX_SCALE);
+    var rect = $('#viewport').getBoundingClientRect();
+    var px = (anchorX === null || anchorX === undefined) ? rect.width / 2 : anchorX;
+    var py = (anchorY === null || anchorY === undefined) ? rect.height / 2 : anchorY;
+    var wx = (px - state.view.x) / state.view.s;
+    var wy = (py - state.view.y) / state.view.s;
+    state.view.s = s;
+    state.view.x = px - wx * s;
+    state.view.y = py - wy * s;
+    applyView();
+  }
+
+  function resetView() {
+    state.view = { x: 80, y: 64, s: 1 };
+    applyView();
+  }
+
+  /* ------------------------------ 卡片渲染 ------------------------------ */
+  function autosize(ta) {
+    if (!ta) return;
+    ta.style.height = 'auto';
+    var max = 460;
+    var h = Math.min(ta.scrollHeight, max);
+    ta.style.height = h + 'px';
+    ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden';
+  }
+
+  // 创建一张卡片的 DOM（只建一次，后续原地更新，避免输入框失焦）
+  function createCard(node) {
+    var nodeId = node.id;
+    var card = {};
+
+    card.el = make('div', { class: 'card', 'data-id': nodeId });
+    var head = make('div', { class: 'card-head' });
+    card.icon = make('span', { class: 'card-icon' });
+    card.label = make('span', { class: 'card-label' });
+    card.badge = make('span', { class: 'badge' });
+    card.addBtn = make('button', {
+      class: 'icon-btn add',
+      title: '派生下一张卡（自动连线）',
+      text: '+',
+      type: 'button'
+    });
+    // 左侧「+」：给这张卡加一个上游（新节点 → 本节点）
+    card.prevBtn = make('button', {
+      class: 'icon-btn add prev',
+      title: '在这张卡前面加一个上游（自动连线）',
+      text: '+',
+      type: 'button'
+    });
+    head.append(card.prevBtn, card.icon, card.label, card.badge, card.addBtn);
+
+    card.ta = make('textarea', {
+      class: 'card-content',
+      placeholder: '内容还没生成…可以直接编辑',
+      spellcheck: 'false'
+    });
+    card.meta = make('div', { class: 'card-meta' });
+    card.verdict = make('div', { class: 'card-verdict hidden' });
+    card.err = make('div', { class: 'card-error hidden' });
+
+    card.el.append(head, card.ta, card.meta, card.verdict, card.err);
+
+    // 点卡片：选中 + 准备拖动（输入框、按钮上不拖）
+    card.el.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      selectNode(nodeId);
+      if (e.target.closest('button, textarea, input, select, a')) return;
+      var live = getNode(nodeId);
+      if (live) startCardDrag(e, live, card);
+    });
+
+    // + 按钮：派生下一张卡
+    card.addBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var live = getNode(nodeId);
+      if (live) deriveNode(live, 'next');
+    });
+
+    // 左侧 + 按钮：加一个上游卡片
+    card.prevBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var live = getNode(nodeId);
+      if (live) deriveNode(live, 'prev');
+    });
+
+    // 内容编辑：写回本地状态 + 防抖 PATCH
+    card.ta.addEventListener('input', function () {
+      var live = getNode(nodeId);
+      if (!live) return;
+      live.content = card.ta.value;
+      autosize(card.ta);
+      drawEdges();
+      queuePatch(nodeId, { content: card.ta.value });
+    });
+    card.ta.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    card.ta.addEventListener('focus', function () { selectNode(nodeId); });
+
+    return card;
+  }
+
+  // 把节点数据刷到卡片上（不重建 DOM）
+  function updateCard(node, card) {
+    card.el.dataset.status = node.status || 'idle';
+    card.el.style.left = node.x + 'px';
+    card.el.style.top = node.y + 'px';
+    card.el.style.zIndex = state.selectedId === node.id ? '3' : '1';
+    card.el.classList.toggle('selected', state.selectedId === node.id);
+
+    card.icon.textContent = TYPE_ICONS[node.type] || '✦';
+    card.icon.title = node.type || 'llm';
+    card.label.textContent = node.label || node.id;
+    card.label.title = node.label || node.id;
+
+    card.badge.textContent = STATUS_TEXT[node.status] || '空闲';
+    card.badge.title = node.error || (STATUS_TEXT[node.status] || '空闲');
+
+    var hasErr = !!node.error;
+    card.err.classList.toggle('hidden', !hasErr);
+    card.err.textContent = hasErr ? node.error : '';
+    card.err.title = node.error || '';
+
+    // 正在输入时不要覆盖用户的光标位置
+    if (document.activeElement !== card.ta) {
+      var text = node.content || '';
+      if (card.ta.value !== text) card.ta.value = text;
+      autosize(card.ta);
+    }
+
+    // 参数行：model · tokens · ms（13px）
+    var usage = node.usage || {};
+    var total = usageTokens(usage);
+    var bits = [];
+    var modelName = node.usedModel || usage.model || node.model;
+    bits.push(modelName || '未设置模型');
+    if (total > 0) bits.push(fmtNum(total) + ' tokens');
+    if (usage.ms) bits.push(fmtMs(usage.ms));
+    card.meta.textContent = bits.join(' · ');
+    card.meta.title = bits.join(' · ');
+
+    // 判定结果：有 verdict 才显示，放在参数行下面
+    var verdict = node.verdict;
+    if (!verdict) {
+      card.verdict.classList.add('hidden');
+      card.verdict.textContent = '';
+      card.verdict.title = '';
+    } else if (verdict.pass) {
+      var okLabel = { human: '人工通过', jev: 'jev 通过', self: '自评通过' }[verdict.by] || '判定通过';
+      card.verdict.className = 'card-verdict pass';
+      card.verdict.textContent = '✓ ' + okLabel;
+      card.verdict.title = verdict.reason || okLabel;
+    } else {
+      var why = truncateText(verdict.reason || '', 36);
+      card.verdict.className = 'card-verdict fail';
+      card.verdict.textContent = '✗ 未达标' + (why ? '：' + why : '');
+      card.verdict.title = verdict.reason || '未达标';
+    }
+  }
+
+  function renderBoard() {
+    var world = $('#world');
+    var nameEl = $('#boardName');
+    if (nameEl) nameEl.textContent = state.board.name || '物料画布';
+    document.title = (state.board.name || '物料画布') + ' · AgentFlow';
+
+    var alive = {};
+    state.board.nodes.forEach(function (n) { alive[n.id] = true; });
+
+    // 删掉已经不存在的卡片
+    state.cards.forEach(function (card, id) {
+      if (!alive[id]) {
+        card.el.remove();
+        state.cards.delete(id);
+      }
+    });
+
+    // 新增或更新卡片
+    state.board.nodes.forEach(function (node) {
+      var card = state.cards.get(node.id);
+      if (!card) {
+        card = createCard(node);
+        state.cards.set(node.id, card);
+        world.appendChild(card.el);
+      }
+      updateCard(node, card);
+    });
+
+    // 选中的卡片被删掉了 → 收起面板
+    if (state.selectedId && !alive[state.selectedId]) {
+      state.selectedId = null;
+      $('#panel').classList.add('hidden');
+    } else if (state.selectedId) {
+      var current = getNode(state.selectedId);
+      if (current) syncPanel(current);
+    }
+
+    // 空画布引导
+    var empty = $('#empty');
+    if (empty) empty.classList.toggle('hidden', state.board.nodes.length > 0);
+
+    // 卡片高度要等布局完成后再量，连线放下一帧画；
+    // 内容长短不一时卡片会变高，这里把重叠的卡片往下让一让，避免互相盖住。
+    requestAnimationFrame(function () {
+      drawEdges();
+      resolveOverlaps();
+    });
+  }
+
+  /* ------------------------------ 重叠避让 ------------------------------ */
+  // 只处理卡片矩形在垂直方向上的重叠：保持上面的卡片不动，把下面的往下推。
+  // 初始数据 / 派生新卡都可能挤在一起，整理一次后把坐标持久化。
+  function resolveOverlaps() {
+    var nodes = state.board.nodes;
+    if (nodes.length < 2) return;
+    var gap = 28;
+    var changed = false;
+    var placed = [];
+
+    var sorted = nodes.slice().sort(function (a, b) {
+      if (a.y !== b.y) return a.y - b.y;
+      return a.x - b.x;
+    });
+
+    sorted.forEach(function (node) {
+      var card = state.cards.get(node.id);
+      var h = card ? card.el.offsetHeight : 160;
+      var guard = 0;
+      var moved = true;
+      while (moved && guard < 100) {
+        moved = false;
+        guard += 1;
+        for (var i = 0; i < placed.length; i += 1) {
+          var other = placed[i];
+          var otherCard = state.cards.get(other.id);
+          var otherH = otherCard ? otherCard.el.offsetHeight : 160;
+          var xOverlap = node.x < other.x + CARD_W + gap && node.x + CARD_W + gap > other.x;
+          var yOverlap = node.y < other.y + otherH + gap && node.y + h + gap > other.y;
+          if (xOverlap && yOverlap) {
+            node.y = Math.round(other.y + otherH + gap);
+            moved = true;
+            changed = true;
+          }
+        }
+      }
+      placed.push(node);
+    });
+
+    if (!changed) return;
+    state.board.nodes.forEach(function (n) {
+      var c = state.cards.get(n.id);
+      if (!c) return;
+      c.el.style.left = n.x + 'px';
+      c.el.style.top = n.y + 'px';
+    });
+    drawEdges();
+    persistBoardSoon();
+  }
+
+  /* ------------------------------ 连线 ------------------------------ */
+  // 贝塞尔连线：父卡右中点 → 子卡左中点，SVG 在卡片下层。
+  // SVG 的 left/top/宽高按所有卡片的包围盒动态计算（世界坐标）。
+  function drawEdges() {
+    var svg = $('#edges');
+    if (!svg) return;
+    var nodes = state.board.nodes;
+    if (!nodes.length) {
+      svg.innerHTML = '';
+      svg.style.display = 'none';
+      return;
+    }
+    svg.style.display = 'block';
+
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(function (n) {
+      var card = state.cards.get(n.id);
+      var h = card ? card.el.offsetHeight : 140;
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + CARD_W);
+      maxY = Math.max(maxY, n.y + h);
+    });
+
+    var pad = 160;
+    var left = minX - pad;
+    var top = minY - pad;
+    var width = Math.max(1, maxX - minX + pad * 2);
+    var height = Math.max(1, maxY - minY + pad * 2);
+    svg.style.left = left + 'px';
+    svg.style.top = top + 'px';
+    svg.style.width = width + 'px';
+    svg.style.height = height + 'px';
+
+    var nodeById = new Map();
+    nodes.forEach(function (n) { nodeById.set(n.id, n); });
+
+    var paths = '';
+    state.board.edges.forEach(function (edge) {
+      var from = nodeById.get(edge.from);
+      var to = nodeById.get(edge.to);
+      if (!from || !to) return;
+      var fromCard = state.cards.get(from.id);
+      var toCard = state.cards.get(to.id);
+      var fromH = fromCard ? fromCard.el.offsetHeight : 140;
+      var toH = toCard ? toCard.el.offsetHeight : 140;
+      var x1 = from.x + CARD_W - left;
+      var y1 = from.y + fromH / 2 - top;
+      var x2 = to.x - left;
+      var y2 = to.y + toH / 2 - top;
+      var dx = Math.max(48, Math.abs(x2 - x1) * 0.45);
+      var cls = ['edge'];
+      if (state.selectedId && (edge.from === state.selectedId || edge.to === state.selectedId)) {
+        cls.push('edge-hi');
+      }
+      if (from.status === 'failed' || to.status === 'blocked') cls.push('edge-bad');
+      paths += '<path class="' + cls.join(' ') + '" vector-effect="non-scaling-stroke" d="M ' +
+        x1 + ' ' + y1 + ' C ' + (x1 + dx) + ' ' + y1 + ', ' + (x2 - dx) + ' ' + y2 +
+        ', ' + x2 + ' ' + y2 + '" />';
+    });
+    svg.innerHTML = paths;
+  }
+
+  /* ------------------------------ 选中与面板 ------------------------------ */
+  function selectNode(id) {
+    if (id !== null && id !== undefined && !getNode(id)) id = null;
+    state.selectedId = id === undefined ? null : id;
+
+    state.cards.forEach(function (card, nid) {
+      var on = nid === state.selectedId;
+      card.el.classList.toggle('selected', on);
+      card.el.style.zIndex = on ? '3' : '1';
+    });
+
+    var panel = $('#panel');
+    if (!panel) return;
+    if (state.selectedId === null) {
+      panel.classList.add('hidden');
+      drawEdges();
+      return;
+    }
+    var node = getNode(state.selectedId);
+    if (!node) {
+      panel.classList.add('hidden');
+      return;
+    }
+    panel.classList.remove('hidden');
+    syncPanel(node);
+    drawEdges();
+  }
+
+  // 下拉选项：实际后端按 provider 出（value 是 provider key，text 带真实模型名）；
+  // 契约形态则直接用 models 数组。画布上已有的模型即使配置里没有也保留。
+  function modelChoices() {
+    var choices = [];
+    var providers = state.config.providers;
+    if (providers && Object.keys(providers).length) {
+      Object.keys(providers).forEach(function (name) {
+        var p = providers[name];
+        choices.push({
+          value: name,
+          text: (p.label || name) + (p.model ? ' · ' + p.model : '')
+        });
+      });
+    } else {
+      var models = state.config.models.length ? state.config.models : DEFAULT_MODELS;
+      models.forEach(function (m) { choices.push({ value: m, text: m }); });
+    }
+    state.board.nodes.forEach(function (n) {
+      if (!n.model) return;
+      var exists = choices.some(function (c) { return c.value === n.model; });
+      if (!exists) choices.push({ value: n.model, text: n.model });
+    });
+    return choices;
+  }
+
+  function fillModelSelect(current) {
+    var sel = $('#fModel');
+    if (!sel) return;
+    var choices = modelChoices();
+    if (current && !choices.some(function (c) { return c.value === current; })) {
+      choices.push({ value: current, text: current });
+    }
+    sel.innerHTML = '';
+    sel.appendChild(make('option', { value: '', text: '（不用模型）' }));
+    choices.forEach(function (c) {
+      sel.appendChild(make('option', { value: c.value, text: c.text }));
+    });
+    sel.value = current || '';
+  }
+
+  // 把选中节点的数据填进底部面板（正在输入的字段不覆盖）
+  function syncPanel(node) {
+    if (!node) return;
+    var setValue = function (sel, value) {
+      var el = $(sel);
+      if (el && document.activeElement !== el) el.value = value;
+    };
+    setValue('#fLabel', node.label || '');
+    setValue('#fTask', node.task || '');
+    setValue('#fCriteria', node.criteria || '');
+
+    var sel = $('#fModel');
+    if (sel && document.activeElement !== sel) fillModelSelect(node.model || '');
+
+    var st = $('#panelStatus');
+    if (st) {
+      st.textContent = STATUS_TEXT[node.status] || '空闲';
+      st.dataset.status = node.status || 'idle';
+    }
+    var pid = $('#panelId');
+    if (pid) pid.textContent = '#' + node.id;
+    var rerun = $('#btnRerun');
+    var del = $('#btnDelete');
+    if (rerun) rerun.disabled = state.running;
+    if (del) del.disabled = state.running;
+    syncVerify(node);
+    syncReviewActions(node);
+    syncSkills(node);
+    syncTools(node);
+    syncUpstreams(node);
+  }
+
+  // 判断「from → to」这条边会不会成环（from 是否已经能从 to 走到）
+  function wouldCycle(from, to) {
+    var seen = {};
+    var stack = [to];
+    while (stack.length) {
+      var cur = stack.pop();
+      if (cur === from) return true;
+      if (seen[cur]) continue;
+      seen[cur] = 1;
+      state.board.edges.forEach(function (e) {
+        if (e.from === cur) stack.push(e.to);
+      });
+    }
+    return false;
+  }
+
+  // 填充面板里的「上游」多选：勾中的就是当前所有前驱
+  function syncUpstreams(node) {
+    var sel = $('#fUp');
+    if (!sel || document.activeElement === sel) return;
+    var current = {};
+    state.board.edges.forEach(function (e) {
+      if (e.to === node.id) current[e.from] = true;
+    });
+    sel.innerHTML = '';
+    state.board.nodes.forEach(function (n) {
+      if (n.id === node.id) return;
+      var opt = document.createElement('option');
+      opt.value = n.id;
+      opt.textContent = (n.label || n.id) + '  ·  ' + n.id;
+      if (current[n.id]) {
+        opt.selected = true;
+      } else if (wouldCycle(n.id, node.id)) {
+        // 会成环的直接禁掉并写明原因，不静默拦截
+        opt.disabled = true;
+        opt.textContent += '（会成环）';
+      }
+      sel.appendChild(opt);
+    });
+  }
+
+  /* ------------------------------ 技能 / MCP 工具 ------------------------------ */
+  // 接口契约：
+  //   GET /api/skills → { dirs, skills: [{ name, description }] }
+  //   GET /api/mcp    → { servers: [{ name, ok, error, tools: [{ name, description }] }] }
+  // 后端可能还没实现，404/500 时只在界面上降级成「暂不可用」，绝不能让画布崩。
+  // 初次失败自动重试一次，之后靠用户点提示 / 设置里的刷新手动重试。
+
+  function truncateText(text, max) {
+    var s = String(text || '').replace(/\s+/g, ' ').trim();
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
+
+  function normalizeSkillList(raw) {
+    var list = raw && Array.isArray(raw.skills) ? raw.skills : [];
+    var seen = {};
+    var out = [];
+    list.forEach(function (item) {
+      var name = typeof item === 'string' ? item : (item && item.name);
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      out.push({
+        name: String(name),
+        description: item && typeof item.description === 'string' ? item.description : ''
+      });
+    });
+    return out;
+  }
+
+  function normalizeMcpList(raw) {
+    var list = raw && Array.isArray(raw.servers) ? raw.servers : [];
+    var seen = {};
+    var out = [];
+    list.forEach(function (srv) {
+      if (!srv || srv.name === undefined || srv.name === null) return;
+      var name = String(srv.name);
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      var tools = Array.isArray(srv.tools) ? srv.tools : [];
+      out.push({
+        name: name,
+        ok: !!srv.ok,
+        error: typeof srv.error === 'string' ? srv.error : '',
+        tools: tools.filter(function (t) { return t && t.name; }).map(function (t) {
+          return {
+            name: String(t.name),
+            description: typeof t.description === 'string' ? t.description : ''
+          };
+        })
+      });
+    });
+    return out;
+  }
+
+  async function loadSkills(options) {
+    var opts = options || {};
+    if (state.skillsLoading) return; // 已有请求在飞，别重复打接口
+    state.skillsLoading = true;
+    state.skillsStatus = 'loading';
+    syncPanelMulti();
+    try {
+      var raw = await api('/api/skills');
+      state.skills = normalizeSkillList(raw);
+      state.skillsStatus = 'ok';
+      state.skillsError = '';
+    } catch (err) {
+      state.skillsStatus = 'error';
+      state.skillsError = err.message;
+      if (opts.notify) toast('技能列表读取失败：' + err.message, 'error');
+      if (opts.retry) {
+        setTimeout(function () { loadSkills({ retry: false }); }, 1600);
+      }
+    } finally {
+      state.skillsLoading = false;
+      syncPanelMulti();
+    }
+  }
+
+  async function loadMcp(options) {
+    var opts = options || {};
+    if (state.mcpLoading) return; // MCP 连接可能几秒，避免同时打多次
+    state.mcpLoading = true;
+    state.mcpStatus = 'loading';
+    syncPanelMulti();
+    renderMcpList();
+    try {
+      var raw = await api('/api/mcp');
+      state.mcpServers = normalizeMcpList(raw);
+      state.mcpStatus = 'ok';
+      state.mcpError = '';
+    } catch (err) {
+      state.mcpStatus = 'error';
+      state.mcpError = err.message;
+      if (opts.notify) toast('MCP 状态读取失败：' + err.message, 'error');
+      if (opts.retry) {
+        setTimeout(function () { loadMcp({ retry: false }); }, 1600);
+      }
+    } finally {
+      state.mcpLoading = false;
+      syncPanelMulti();
+      renderMcpList();
+    }
+  }
+
+  // 接口数据回来或选中节点变化时，只刷新面板里的两个多选，不做整页重渲染
+  function syncPanelMulti() {
+    if (!state.selectedId) return;
+    var node = getNode(state.selectedId);
+    if (!node) return;
+    syncSkills(node);
+    syncTools(node);
+  }
+
+  // 接口数据回来或选中节点变化时，只刷新面板里的复选框/单选，不做整页重渲染
+  function syncPanelMulti() {
+    if (!state.selectedId) return;
+    var node = getNode(state.selectedId);
+    if (!node) return;
+    syncSkills(node);
+    syncTools(node);
+  }
+
+  function checkedValues(list) {
+    var picked = [];
+    if (!list) return picked;
+    var boxes = list.querySelectorAll('input[type="checkbox"]');
+    for (var i = 0; i < boxes.length; i += 1) {
+      if (boxes[i].checked && boxes[i].value) picked.push(boxes[i].value);
+    }
+    return picked;
+  }
+
+  // 一条复选框：<label><input type=checkbox> 名字 <灰字描述></label>
+  function makeCheckItem(value, name, desc, checked, title) {
+    var label = make('label', { class: 'check-item' });
+    var box = make('input', { type: 'checkbox', value: value });
+    box.checked = !!checked;
+    label.appendChild(box);
+    label.appendChild(make('span', { class: 'check-name', text: name }));
+    if (desc) {
+      label.appendChild(make('span', { class: 'check-sep', text: '·' }));
+      label.appendChild(make('span', { class: 'check-desc', text: desc, title: title || desc }));
+    }
+    label.title = title || name;
+    return label;
+  }
+
+  function makeCheckEmpty(text, isErr) {
+    return make('div', { class: 'check-empty' + (isErr ? ' err' : ''), text: text });
+  }
+
+  // 技能复选框：node.skills 里的名字为勾选；列表里没有的也保留，避免静默丢选择
+  function syncSkills(node) {
+    var list = $('#skillList');
+    var hint = $('#skillsHint');
+    if (!list || !hint) return;
+
+    // 用户正在列表里点选时不重建，避免丢焦点；只更新下方提示
+    if (!list.contains(document.activeElement)) {
+      list.innerHTML = '';
+      var chosen = {};
+      (node.skills || []).forEach(function (name) { chosen[name] = true; });
+
+      if (state.skillsStatus === 'loading' && !state.skills.length) {
+        list.appendChild(makeCheckEmpty('正在读取技能…'));
+      } else if (state.skillsStatus === 'error' && !state.skills.length) {
+        list.appendChild(makeCheckEmpty('技能接口暂不可用', true));
+      } else if (!state.skills.length) {
+        list.appendChild(makeCheckEmpty('还没有发现技能'));
+      } else {
+        var listed = {};
+        state.skills.forEach(function (skill) {
+          listed[skill.name] = true;
+          list.appendChild(makeCheckItem(
+            skill.name,
+            skill.name,
+            truncateText(skill.description || '', 48),
+            !!chosen[skill.name],
+            skill.description || skill.name
+          ));
+        });
+        (node.skills || []).forEach(function (name) {
+          if (listed[name]) return;
+          list.appendChild(makeCheckItem(
+            name,
+            name,
+            '已不在技能列表中，勾选状态仍会保留',
+            true,
+            '技能列表里没有这个技能，当前选择仍会保留'
+          ));
+        });
+      }
+    }
+
+    updateSkillsHint(node, hint);
+  }
+
+  function updateSkillsHint(node, hint) {
+    var count = (node.skills || []).length;
+    hint.className = 'field-note';
+    hint.title = '';
+    if (state.skillsStatus === 'loading') {
+      hint.textContent = '正在读取技能…';
+    } else if (state.skillsStatus === 'error') {
+      hint.className = 'field-note err';
+      hint.textContent = '技能接口暂不可用' +
+        (state.skills.length ? '（显示上次结果）' : '') + ' · 点此重试';
+      hint.title = state.skillsError || '技能接口暂不可用';
+    } else if (!state.skills.length) {
+      hint.textContent = '还没有发现技能';
+    } else {
+      hint.textContent = (count ? '已勾选 ' + count + ' 个' : '未勾选技能') + ' · 勾选即保存';
+    }
+  }
+
+  // 工具复选框：按 MCP server 分组，value = serverName.toolName
+  function syncTools(node) {
+    var list = $('#toolList');
+    var hint = $('#toolsHint');
+    if (!list || !hint) return;
+
+    if (!list.contains(document.activeElement)) {
+      list.innerHTML = '';
+      var chosen = {};
+      (node.tools || []).forEach(function (name) { chosen[name] = true; });
+
+      if (state.mcpStatus === 'loading' && !state.mcpServers.length) {
+        list.appendChild(makeCheckEmpty('正在读取 MCP…'));
+      } else if (state.mcpStatus === 'error' && !state.mcpServers.length) {
+        list.appendChild(makeCheckEmpty('MCP 接口暂不可用', true));
+      } else if (!state.mcpServers.length) {
+        list.appendChild(makeCheckEmpty('还没配置 MCP 服务器'));
+      } else {
+        var listed = {};
+        state.mcpServers.forEach(function (srv) {
+          var group = make('div', { class: 'check-group' });
+          var head = make('div', { class: 'check-group-head' });
+          head.appendChild(make('span', { class: 'mcp-dot ' + (srv.ok ? 'ok' : 'bad') }));
+          head.appendChild(make('span', { class: 'check-group-name', text: srv.name }));
+          head.appendChild(make('span', {
+            class: 'check-group-count',
+            text: srv.ok ? srv.tools.length + ' 个工具' : '连接失败'
+          }));
+          group.appendChild(head);
+
+          if (!srv.tools.length) {
+            group.appendChild(makeCheckEmpty(srv.ok ? '没有可用工具' : (srv.error || '连接失败')));
+          }
+          srv.tools.forEach(function (tool) {
+            var value = srv.name + '.' + tool.name;
+            listed[value] = true;
+            group.appendChild(makeCheckItem(
+              value,
+              tool.name,
+              truncateText(tool.description || '', 40),
+              !!chosen[value],
+              (tool.description || value) + (srv.ok ? '' : '\n（该 MCP 服务器当前连接失败）')
+            ));
+          });
+          list.appendChild(group);
+        });
+
+        // 节点上挂着、但当前列表里没有的工具也保留，避免静默丢选择
+        var unknown = (node.tools || []).filter(function (name) { return !listed[name]; });
+        if (unknown.length) {
+          var staleGroup = make('div', { class: 'check-group' });
+          staleGroup.appendChild(make('div', { class: 'check-group-head' }, [
+            make('span', { class: 'check-group-name', text: '已保存（当前不可用）' })
+          ]));
+          unknown.forEach(function (name) {
+            staleGroup.appendChild(makeCheckItem(
+              name, name, '当前 MCP 列表里没有这个工具', true,
+              '当前 MCP 列表里没有这个工具，勾选状态仍会保留'
+            ));
+          });
+          list.appendChild(staleGroup);
+        }
+      }
+    }
+
+    updateToolsHint(node, hint);
+  }
+
+  function updateToolsHint(node, hint) {
+    var totalTools = 0;
+    state.mcpServers.forEach(function (srv) { totalTools += srv.tools.length; });
+    var count = (node.tools || []).length;
+    hint.className = 'field-note';
+    hint.title = '';
+    if (state.mcpStatus === 'loading') {
+      hint.textContent = '正在读取 MCP…';
+    } else if (state.mcpStatus === 'error') {
+      hint.className = 'field-note err';
+      hint.textContent = 'MCP 接口暂不可用' +
+        (state.mcpServers.length ? '（显示上次结果）' : '') + ' · 点此重试';
+      hint.title = state.mcpError || 'MCP 接口暂不可用';
+    } else if (!totalTools) {
+      hint.textContent = '还没配置 MCP 服务器' +
+        (state.mcpServers.length ? '（已配置 ' + state.mcpServers.length + ' 个，但没有可用工具）' : '');
+    } else {
+      hint.textContent = (count ? '已勾选 ' + count + ' 个工具' : '未勾选工具') + ' · 勾选即保存';
+    }
+  }
+
+  // 勾选 / 取消勾选：立即更新本地状态 + 防抖 PATCH，不做整页重渲染
+  function onSkillsChange(e) {
+    if (e && e.target && e.target.type !== 'checkbox') return;
+    var id = state.selectedId;
+    var node = id ? getNode(id) : null;
+    if (!node) return;
+    node.skills = checkedValues($('#skillList'));
+    updateSkillsHint(node, $('#skillsHint'));
+    queuePatch(id, { skills: node.skills });
+  }
+
+  function onToolsChange(e) {
+    if (e && e.target && e.target.type !== 'checkbox') return;
+    var id = state.selectedId;
+    var node = id ? getNode(id) : null;
+    if (!node) return;
+    node.tools = checkedValues($('#toolList'));
+    updateToolsHint(node, $('#toolsHint'));
+    queuePatch(id, { tools: node.tools });
+  }
+
+  /* ------------------------------ 结果判断 / 人工确认 ------------------------------ */
+  function syncVerify(node) {
+    var box = $('#verifyOptions');
+    if (!box) return;
+    var value = node.verify || '';
+    var radios = box.querySelectorAll('input[name="verify"]');
+    Array.prototype.forEach.call(radios, function (radio) {
+      var on = radio.value === value;
+      radio.checked = on;
+      var opt = radio.closest('.verify-opt');
+      if (opt) opt.classList.toggle('on', on);
+    });
+  }
+
+  function onVerifyChange(e) {
+    var target = e && e.target;
+    if (!target || target.name !== 'verify') return;
+    var id = state.selectedId;
+    var node = id ? getNode(id) : null;
+    if (!node) return;
+    node.verify = target.value;
+    syncVerify(node);
+    // 结果判断是单选，变更后立即 PATCH（不走输入框的 500ms 防抖）
+    patchNodeNow(id, { verify: node.verify }, '保存结果判断');
+  }
+
+  async function patchNodeNow(id, patch, what) {
+    if (DEMO) return; // 演示模式只改本地
+    try {
+      await api('/api/nodes/' + encodeURIComponent(id), { method: 'PATCH', body: patch });
+    } catch (err) {
+      toast((what || '保存') + '失败：' + err.message, 'error');
+    }
+  }
+
+  // status === 'review' 时在面板底部显示「通过 / 打回重跑」
+  function syncReviewActions(node) {
+    var box = $('#verifyActions');
+    if (!box) return;
+    box.classList.toggle('hidden', !(node && node.status === 'review'));
+  }
+
+  // 只把响应里真实出现的字段合并进本地节点，避免后端回部分字段时把别的内容冲掉
+  function applyNodePatch(node, raw) {
+    if (!node || !raw || typeof raw !== 'object') return;
+    var fresh = normalizeNode(raw);
+    if (!fresh) return;
+    ['label', 'type', 'x', 'y', 'model', 'fallback', 'task', 'criteria',
+      'content', 'status', 'usage', 'error', 'usedModel',
+      'skills', 'tools', 'verify', 'verdict'].forEach(function (key) {
+      if (raw[key] !== undefined) node[key] = fresh[key];
+    });
+  }
+
+  // 处理 POST /api/verify/:id 的返回：可能回 node、board 或只有 { ok: true }
+  function applyVerifyResult(id, res) {
+    if (!res || typeof res !== 'object') return false;
+    var board = res.board && typeof res.board === 'object' ? res.board : null;
+    if (!board && Array.isArray(res.nodes) && Array.isArray(res.edges)) board = res;
+    if (board) {
+      state.board = normalizeBoard(board);
+      renderBoard();
+      return true;
+    }
+    var rawNode = res.node && typeof res.node === 'object' ? res.node : null;
+    if (!rawNode && res.id !== undefined && res.status !== undefined) rawNode = res;
+    if (!rawNode) return false;
+    var fresh = normalizeNode(rawNode);
+    if (!fresh) return false;
+    var node = getNode(fresh.id);
+    if (node) {
+      applyNodePatch(node, rawNode);
+      updateNodeUI(node);
+      if (state.selectedId === node.id) syncPanel(node);
+      drawEdges();
+    }
+    return true;
+  }
+
+  async function submitVerify(pass) {
+    var id = state.selectedId;
+    var node = id ? getNode(id) : null;
+    if (!node) return;
+    var passBtn = $('#btnVerifyPass');
+    var failBtn = $('#btnVerifyFail');
+    if (passBtn) passBtn.disabled = true;
+    if (failBtn) failBtn.disabled = true;
+
+    try {
+      if (DEMO) {
+        node.status = pass ? 'done' : 'idle';
+        node.verdict = {
+          by: 'human', pass: !!pass,
+          reason: pass ? '' : '人工打回',
+          at: Date.now()
+        };
+        updateNodeUI(node);
+        if (state.selectedId === id) syncPanel(node);
+        toast(pass ? '已通过（demo 本地）' : '已打回（demo 本地）', 'warn');
+        return;
+      }
+
+      var res = await api('/api/verify/' + encodeURIComponent(id), {
+        method: 'POST',
+        body: { pass: !!pass }
+      });
+      // 后端只回 { ok: true } 时重新拉一次画布，状态以服务端为准
+      if (!applyVerifyResult(id, res)) await loadBoard();
+
+      var live = getNode(id);
+      if (live) {
+        updateNodeUI(live);
+        if (state.selectedId === id) syncPanel(live);
+        drawEdges();
+      }
+      toast(pass ? '已通过' : '已打回，等待重跑', 'ok');
+    } catch (err) {
+      toast('提交判定失败：' + err.message, 'error');
+    } finally {
+      if (passBtn) passBtn.disabled = false;
+      if (failBtn) failBtn.disabled = false;
+      // 请求期间用户可能切到了别的卡，别用旧节点状态去改新面板
+      if (state.selectedId === id) syncReviewActions(getNode(id));
+    }
+  }
+
+  /* ------------------------------ 设置弹窗里的 MCP 列表 ------------------------------ */
+  function renderMcpList() {
+    var box = $('#mcpList');
+    var msg = $('#mcpMsg');
+    if (!box || !msg) return;
+    box.innerHTML = '';
+    msg.className = 'mcp-msg';
+    msg.title = '';
+    var refreshBtn = $('#btnMcpRefresh');
+    if (refreshBtn) refreshBtn.disabled = state.mcpStatus === 'loading';
+
+    if (state.mcpStatus === 'loading') {
+      msg.textContent = '正在读取 MCP 服务器…';
+      return;
+    }
+
+    if (state.mcpStatus === 'error') {
+      msg.className = 'mcp-msg err';
+      msg.textContent = 'MCP 接口暂不可用：' + truncateText(state.mcpError || '读取失败', 90) +
+        (state.mcpServers.length ? '（下面是上次结果）' : '');
+      msg.title = state.mcpError || '';
+      if (!state.mcpServers.length) return;
+    } else if (!state.mcpServers.length) {
+      msg.textContent = '还没配置 MCP 服务器';
+      return;
+    } else {
+      var okCount = 0;
+      var toolCount = 0;
+      state.mcpServers.forEach(function (srv) {
+        if (srv.ok) okCount += 1;
+        toolCount += srv.tools.length;
+      });
+      msg.textContent = state.mcpServers.length + ' 个服务器 · ' + toolCount + ' 个工具' +
+        (okCount < state.mcpServers.length ? ' · ' + (state.mcpServers.length - okCount) + ' 个连接失败' : '');
+    }
+
+    state.mcpServers.forEach(function (server) {
+      var row = make('div', { class: 'mcp-row' });
+      var open = !!state.mcpOpen[server.name];
+      var head = make('div', {
+        class: 'mcp-row-head',
+        role: 'button',
+        tabindex: '0',
+        title: server.error || (server.ok ? '连接正常' : '连接失败')
+      });
+      head.appendChild(make('span', { class: 'mcp-dot ' + (server.ok ? 'ok' : 'bad') }));
+      head.appendChild(make('span', { class: 'mcp-name', text: server.name }));
+      head.appendChild(make('span', {
+        class: 'mcp-count',
+        text: server.ok ? server.tools.length + ' 个工具' : '不可用'
+      }));
+      var caret = make('span', { class: 'mcp-caret' + (open ? ' open' : ''), text: '▾' });
+      head.appendChild(caret);
+
+      var detail = make('div', { class: 'mcp-tools' + (open ? '' : ' hidden') });
+      if (server.error) {
+        detail.appendChild(make('div', { class: 'mcp-err', text: server.error }));
+      }
+      if (server.tools.length) {
+        server.tools.forEach(function (tool) {
+          var item = make('div', { class: 'mcp-tool' });
+          item.appendChild(make('span', { class: 'mcp-tool-name', text: tool.name }));
+          if (tool.description) {
+            item.appendChild(make('span', { class: 'mcp-tool-desc', text: tool.description }));
+          }
+          detail.appendChild(item);
+        });
+      } else if (server.ok) {
+        detail.appendChild(make('div', { class: 'mcp-msg', text: '没有列出工具' }));
+      }
+
+      var toggle = function () {
+        var hidden = detail.classList.toggle('hidden');
+        caret.classList.toggle('open', !hidden);
+        state.mcpOpen[server.name] = !hidden;
+      };
+      head.addEventListener('click', toggle);
+      head.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggle();
+        }
+      });
+
+      row.append(head, detail);
+      box.appendChild(row);
+    });
+  }
+
+  // 添加 stdio server：PUT /api/config { mcpServers: { name: { command, args, env } } }
+  async function addMcpServer() {
+    var nameEl = $('#mcpName');
+    var cmdEl = $('#mcpCommand');
+    var argsEl = $('#mcpArgs');
+    var hint = $('#mcpAddHint');
+    if (!nameEl || !cmdEl || !argsEl) return;
+
+    var name = (nameEl.value || '').trim();
+    if (!name) {
+      toast('先填 MCP server 的名字', 'warn');
+      nameEl.focus();
+      return;
+    }
+    if (/[.\s]/.test(name)) {
+      toast('server 名字不要包含空格或点号（工具 value 是 server.tool）', 'warn');
+      nameEl.focus();
+      return;
+    }
+    var command = (cmdEl.value || '').trim() || '/usr/local/bin/node';
+    var args = (argsEl.value || '').split('\n')
+      .map(function (s) { return s.trim(); })
+      .filter(Boolean);
+    var spec = { command: command, args: args, env: {} };
+
+    if (DEMO) {
+      toast('demo 模式没有后端，MCP 配置无法保存', 'warn');
+      return;
+    }
+
+    var btn = $('#btnMcpAdd');
+    if (btn) { btn.disabled = true; btn.textContent = '添加中…'; }
+    if (hint) hint.textContent = '正在提交到 /api/config…';
+    try {
+      var payload = { mcpServers: {} };
+      payload.mcpServers[name] = spec;
+      await api('/api/config', { method: 'PUT', body: payload });
+      state.mcpSpecs[name] = spec;
+      toast('已添加 MCP 服务器：' + name, 'ok');
+      nameEl.value = '';
+      argsEl.value = '';
+      cmdEl.value = '/usr/local/bin/node';
+      if (hint) hint.textContent = '已保存，正在重新读取 MCP 状态…';
+      await loadMcp({ notify: true, retry: true });
+      await loadConfig();
+      if (hint) hint.textContent = '已添加；工具列表没出现时可点右上角刷新';
+    } catch (err) {
+      if (hint) hint.textContent = '添加失败：' + truncateText(err.message, 70);
+      toast('添加 MCP 服务器失败：' + err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '添加'; }
+    }
+  }
+
+  /* ------------------------------ 卡片拖动 ------------------------------ */
+  function startCardDrag(e, node, card) {
+    e.preventDefault();
+    var startX = e.clientX;
+    var startY = e.clientY;
+    var originX = node.x;
+    var originY = node.y;
+    var moved = false;
+
+    card.el.classList.add('dragging');
+    $('#viewport').classList.add('panning');
+
+    var onMove = function (ev) {
+      var dx = (ev.clientX - startX) / state.view.s;
+      var dy = (ev.clientY - startY) / state.view.s;
+      if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) > 3) moved = true;
+      node.x = Math.round(originX + dx);
+      node.y = Math.round(originY + dy);
+      card.el.style.left = node.x + 'px';
+      card.el.style.top = node.y + 'px';
+      drawEdges();
+    };
+
+    var onUp = function () {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      card.el.classList.remove('dragging');
+      $('#viewport').classList.remove('panning');
+      if (moved) persistBoardSoon();
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  /* ------------------------------ 画布平移 / 缩放 ------------------------------ */
+  function bindViewport() {
+    var vp = $('#viewport');
+
+    // 拖空白平移；点空白取消选中
+    vp.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      if (e.target.closest('.card') || e.target.closest('.empty-state')) return;
+      selectNode(null);
+      var startX = e.clientX;
+      var startY = e.clientY;
+      var originX = state.view.x;
+      var originY = state.view.y;
+      vp.classList.add('panning');
+      if (vp.setPointerCapture) {
+        try { vp.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+      }
+      var onMove = function (ev) {
+        state.view.x = originX + (ev.clientX - startX);
+        state.view.y = originY + (ev.clientY - startY);
+        applyView();
+      };
+      var onUp = function () {
+        vp.classList.remove('panning');
+        vp.removeEventListener('pointermove', onMove);
+        vp.removeEventListener('pointerup', onUp);
+        vp.removeEventListener('pointercancel', onUp);
+      };
+      vp.addEventListener('pointermove', onMove);
+      vp.addEventListener('pointerup', onUp);
+      vp.addEventListener('pointercancel', onUp);
+      e.preventDefault();
+    });
+
+    // 滚轮缩放，以光标为锚点；textarea 上让内容自己滚
+    vp.addEventListener('wheel', function (e) {
+      if (e.target.closest('textarea')) return;
+      e.preventDefault();
+      var rect = vp.getBoundingClientRect();
+      var factor = Math.exp(-e.deltaY * 0.0015);
+      setZoom(state.view.s * factor, e.clientX - rect.left, e.clientY - rect.top);
+    }, { passive: false });
+  }
+
+  /* ------------------------------ 节点字段的防抖保存 ------------------------------ */
+  function queuePatch(id, patch) {
+    if (DEMO) return; // 演示模式只改本地
+    var buf = state.patchBuffers.get(id);
+    if (!buf) {
+      buf = { data: {}, timer: null };
+      state.patchBuffers.set(id, buf);
+    }
+    Object.assign(buf.data, patch);
+    if (buf.timer) clearTimeout(buf.timer);
+    buf.timer = setTimeout(function () { flushPatch(id); }, 500);
+  }
+
+  async function flushPatch(id) {
+    var buf = state.patchBuffers.get(id);
+    if (!buf) return;
+    state.patchBuffers.delete(id);
+    if (buf.timer) clearTimeout(buf.timer);
+    if (!Object.keys(buf.data).length) return;
+    try {
+      await api('/api/nodes/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        body: buf.data
+      });
+    } catch (err) {
+      toast('保存卡片失败：' + err.message, 'error');
+    }
+  }
+
+  async function flushAllPatches() {
+    var ids = Array.from(state.patchBuffers.keys());
+    await Promise.all(ids.map(function (id) { return flushPatch(id); }));
+  }
+
+  // 拖动结束后持久化整个 board（按契约 PUT /api/board）
+  function serializeBoard() {
+    return {
+      id: state.board.id,
+      name: state.board.name,
+      nodes: state.board.nodes.map(function (n) {
+        return {
+          id: n.id, label: n.label, type: n.type, x: n.x, y: n.y,
+          model: n.model, fallback: n.fallback, task: n.task, criteria: n.criteria,
+          skills: n.skills || [], tools: n.tools || [],
+          verify: n.verify || '', verdict: n.verdict || null,
+          content: n.content, status: n.status, usage: n.usage, error: n.error
+        };
+      }),
+      edges: state.board.edges.map(function (e) { return { from: e.from, to: e.to }; })
+    };
+  }
+
+  async function persistBoard() {
+    if (DEMO) return;
+    try {
+      await api('/api/board', { method: 'PUT', body: serializeBoard() });
+    } catch (err) {
+      toast('保存画布布局失败：' + err.message, 'error');
+    }
+  }
+
+  function persistBoardSoon() {
+    if (DEMO) return;
+    if (state.persistTimer) clearTimeout(state.persistTimer);
+    state.persistTimer = setTimeout(function () { persistBoard(); }, 260);
+  }
+
+  /* ------------------------------ 新建 / 派生 / 删除 ------------------------------ */
+  async function postNode(payload) {
+    if (DEMO) {
+      state.demoSeq += 1;
+      var demoNode = normalizeNode({
+        id: 'demo-' + state.demoSeq,
+        label: payload.label,
+        type: payload.type,
+        x: payload.x,
+        y: payload.y,
+        model: payload.model,
+        task: payload.task,
+        content: '',
+        status: 'idle'
+      });
+      state.board.nodes.push(demoNode);
+      if (payload.from) state.board.edges.push({ from: payload.from, to: demoNode.id });
+      if (payload.to) state.board.edges.push({ from: demoNode.id, to: payload.to });
+      renderBoard();
+      selectNode(demoNode.id);
+      toast('demo 模式：改动只在当前页面，不落盘', 'warn');
+      return demoNode;
+    }
+    var created = await api('/api/nodes', { method: 'POST', body: payload });
+    var raw = created && created.node ? created.node : created;
+    var node = normalizeNode(raw);
+    if (!node) throw new Error('服务端没有返回新节点');
+    if (!getNode(node.id)) state.board.nodes.push(node);
+    if (payload.from) {
+      var exists = state.board.edges.some(function (e) {
+        return e.from === payload.from && e.to === node.id;
+      });
+      if (!exists) state.board.edges.push({ from: payload.from, to: node.id });
+    }
+    // 向左派生：新节点是上游，边方向相反
+    if (payload.to) {
+      var exists2 = state.board.edges.some(function (e) {
+        return e.from === node.id && e.to === payload.to;
+      });
+      if (!exists2) state.board.edges.push({ from: node.id, to: payload.to });
+    }
+    renderBoard();
+    selectNode(node.id);
+    return node;
+  }
+
+  async function deriveNode(parent, dir) {
+    var forward = dir !== 'prev';
+    var payload = {
+      label: '新卡片',
+      type: parent.type || 'llm',
+      x: Math.round(forward ? parent.x + CARD_W + 72 : parent.x - CARD_W - 72),
+      y: Math.round(parent.y),
+      model: parent.model || state.config.models[0] || DEFAULT_MODELS[0],
+      task: ''
+    };
+    // 向右派生：新卡是下游（parent → new）；向左派生：新卡是上游（new → parent）
+    if (forward) payload.from = parent.id;
+    else payload.to = parent.id;
+    try {
+      await postNode(payload);
+      toast(forward ? '已派生新卡片' : '已添加上游卡片', 'ok');
+    } catch (err) {
+      toast('新建卡片失败：' + err.message, 'error');
+    }
+  }
+
+  function createFirstNode() {
+    var vp = $('#viewport');
+    var rect = vp.getBoundingClientRect();
+    var x = Math.round((rect.width / 2 - state.view.x) / state.view.s - CARD_W / 2);
+    var y = Math.round((rect.height / 2 - state.view.y) / state.view.s - 90);
+    postNode({
+      label: '新卡片',
+      type: 'llm',
+      x: x,
+      y: y,
+      model: state.config.models[0] || DEFAULT_MODELS[0],
+      task: ''
+    }).catch(function (err) {
+      toast('新建卡片失败：' + err.message, 'error');
+    });
+  }
+
+  async function deleteNode(id) {
+    var node = getNode(id);
+    if (!node) return;
+    if (!window.confirm('删除卡片「' + (node.label || id) + '」？')) return;
+
+    if (DEMO) {
+      state.board.nodes = state.board.nodes.filter(function (n) { return n.id !== id; });
+      state.board.edges = state.board.edges.filter(function (e) {
+        return e.from !== id && e.to !== id;
+      });
+      // 选中项被删掉时连面板一起收起（selectNode(null) 会负责隐藏）
+      if (state.selectedId === id) selectNode(null);
+      renderBoard();
+      toast('已删除（demo 本地）', 'ok');
+      return;
+    }
+
+    try {
+      await api('/api/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
+      state.board.nodes = state.board.nodes.filter(function (n) { return n.id !== id; });
+      state.board.edges = state.board.edges.filter(function (e) {
+        return e.from !== id && e.to !== id;
+      });
+      // 选中项被删掉时连面板一起收起（selectNode(null) 会负责隐藏）
+      if (state.selectedId === id) selectNode(null);
+      renderBoard();
+      toast('已删除卡片', 'ok');
+    } catch (err) {
+      toast('删除失败：' + err.message, 'error');
+    }
+  }
+
+  /* ------------------------------ 运行与 SSE ------------------------------ */
+  function updateRunUI() {
+    var btn = $('#btnRun');
+    if (btn) {
+      btn.disabled = state.running;
+      btn.textContent = state.running ? '运行中…' : '▶ 跑全图';
+    }
+    var rerun = $('#btnRerun');
+    var del = $('#btnDelete');
+    if (rerun) rerun.disabled = state.running;
+    if (del) del.disabled = state.running;
+  }
+
+  function updateNodeUI(node) {
+    if (!node) return;
+    var card = state.cards.get(node.id);
+    if (card) updateCard(node, card);
+    if (state.selectedId === node.id) {
+      var st = $('#panelStatus');
+      if (st) {
+        st.textContent = STATUS_TEXT[node.status] || '空闲';
+        st.dataset.status = node.status || 'idle';
+      }
+      var pid = $('#panelId');
+      if (pid) pid.textContent = '#' + node.id;
+      syncReviewActions(node);
+    }
+  }
+
+  // 处理一条运行事件；返回 false 表示事件流可以停了
+  function handleRunEvent(ev) {
+    if (!ev || typeof ev !== 'object') return true;
+    var node = ev.id !== null && ev.id !== undefined ? getNode(String(ev.id)) : null;
+
+    switch (ev.type) {
+      case 'node:start':
+        if (node) {
+          node.status = 'running';
+          node.error = '';
+          node.usage = {};
+          node.usedModel = '';
+          node.verdict = null; // 重跑时先藏起上一轮的判定结果
+          updateNodeUI(node);
+          drawEdges();
+        }
+        break;
+
+      case 'node:done':
+        if (node) {
+          // 人工确认模式：引擎发的是 node:done + status:'review'，不能当成普通完成
+          node.status = ev.status === 'review' ? 'review' : 'done';
+          if (typeof ev.content === 'string') node.content = ev.content;
+          node.usedModel = ev.model || node.model;
+          node.usage = ev.usage && typeof ev.usage === 'object' ? ev.usage : {};
+          node.error = '';
+          if (ev.verdict) node.verdict = normalizeVerdict(ev.verdict);
+          else if (node.status === 'review') node.verdict = null;
+          updateNodeUI(node);
+          drawEdges();
+          if (node.status === 'review') {
+            toast('「' + (node.label || node.id) + '」等待人工确认', 'warn');
+          }
+        }
+        break;
+
+      case 'node:review':
+        // 待人工确认：卡片橙色角标 + 面板出现「通过 / 打回」
+        if (node) {
+          node.status = 'review';
+          node.error = '';
+          if (ev.verdict) node.verdict = normalizeVerdict(ev.verdict);
+          updateNodeUI(node);
+          drawEdges();
+          toast('「' + (node.label || node.id) + '」等待人工确认', 'warn');
+        }
+        break;
+
+      case 'node:retry':
+        if (node) {
+          node.error = (ev.model || '模型') + ' 调用失败：' + (ev.error || '未知错误');
+          updateNodeUI(node);
+          toast('「' + (node.label || node.id) + '」' + (ev.model || '') +
+            ' 调用失败，尝试备用模型…', 'warn');
+        }
+        break;
+
+      case 'node:failed':
+        if (node) {
+          node.status = 'failed';
+          var tried = Array.isArray(ev.tried) ? ev.tried : [];
+          node.error = tried.length
+            ? '全部模型失败：' + tried.map(function (t) {
+              return (t.model || '?') + '（' + (t.error || '?') + '）';
+            }).join('；')
+            : '节点执行失败';
+          updateNodeUI(node);
+          drawEdges();
+        }
+        break;
+
+      case 'node:blocked':
+        if (node) {
+          node.status = 'blocked';
+          node.error = '被阻塞：' + (ev.reason === 'upstream-failed' ? '上游节点失败' : (ev.reason || '未知原因'));
+          updateNodeUI(node);
+          drawEdges();
+        }
+        break;
+
+      case 'run:error':
+        // 后端跑图中途抛错（不是节点失败，而是整轮运行失败）
+        state.running = false;
+        state.runEnded = true;
+        updateRunUI();
+        toast('运行出错：' + (ev.error || '未知错误'), 'error');
+        return false;
+
+      case 'run:end':
+        state.running = false;
+        state.runEnded = true;
+        updateRunUI();
+        var summary = ev.summary || {};
+        var doneN = Array.isArray(summary.done) ? summary.done.length : 0;
+        var failN = Array.isArray(summary.failed) ? summary.failed.length : 0;
+        var blockN = Array.isArray(summary.blocked) ? summary.blocked.length : 0;
+        var reviewN = Array.isArray(summary.review) ? summary.review.length : 0;
+        toast('运行结束：成功 ' + doneN + ' · 失败 ' + failN + ' · 阻塞 ' + blockN +
+          (reviewN ? ' · 待确认 ' + reviewN : ''),
+          failN || blockN ? 'warn' : 'ok');
+        // 物料变长后卡片会变高，运行结束后统一整理一次位置，避免互相盖住
+        setTimeout(resolveOverlaps, 60);
+        return false;
+
+      default:
+        break;
+    }
+    return true;
+  }
+
+  // 读取 POST 响应体里的 SSE 流（EventSource 只能 GET，POST 只能走 fetch 流）
+  async function readSSE(res, handle) {
+    if (!res.body) throw new Error('当前浏览器不支持流式响应读取');
+    var reader = res.body.getReader();
+    var decoder = new TextDecoder('utf-8');
+    var buffer = '';
+    var finished = false;
+    try {
+      while (!finished) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, '\n');
+        var cut;
+        while ((cut = buffer.indexOf('\n\n')) !== -1) {
+          var frame = buffer.slice(0, cut);
+          buffer = buffer.slice(cut + 2);
+          var payload = frame.split('\n')
+            .filter(function (line) { return line.indexOf('data:') === 0; })
+            .map(function (line) { return line.slice(5).replace(/^ /, ''); })
+            .join('\n')
+            .trim();
+          if (!payload) continue;
+          var ev;
+          try { ev = JSON.parse(payload); } catch (err) { continue; }
+          if (handle(ev) === false) { finished = true; break; }
+        }
+      }
+    } finally {
+      try { await reader.cancel(); } catch (err) { /* 忽略 */ }
+    }
+  }
+
+  // 兼容「POST 先返回 JSON，再用 GET 事件流」的后端
+  function listenSSE(url, handle) {
+    return new Promise(function (resolve, reject) {
+      var source;
+      try {
+        source = new EventSource(url);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      var settled = false;
+      var finish = function (err) {
+        if (settled) return;
+        settled = true;
+        source.close();
+        if (err) reject(err); else resolve();
+      };
+      source.onmessage = function (event) {
+        var data;
+        try { data = JSON.parse(event.data); } catch (err) { return; }
+        if (handle(data) === false) finish();
+      };
+      source.onerror = function () {
+        finish(new Error('SSE 事件流连接失败或中断'));
+      };
+    });
+  }
+
+  async function demoRun(targets) {
+    var ids = targets && targets.length
+      ? targets.slice()
+      : state.board.nodes.map(function (n) { return n.id; });
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      var node = getNode(id);
+      if (!node) continue;
+      node.status = 'running';
+      node.error = '';
+      node.usage = {};
+      node.usedModel = '';
+      updateNodeUI(node);
+      drawEdges();
+      await sleep(700);
+      var live = getNode(id);
+      if (!live || live.status !== 'running') continue;
+      if (!live.content) live.content = '【演示输出】' + (live.task || '这是一段生成的物料') + '。';
+      live.status = 'done';
+      live.usedModel = live.model || 'demo-model';
+      live.usage = {
+        total_tokens: 600 + Math.round(Math.random() * 1200),
+        ms: 700 + Math.round(Math.random() * 1500)
+      };
+      updateNodeUI(live);
+      drawEdges();
+      await sleep(250);
+    }
+    resolveOverlaps();
+    toast('演示运行结束', 'ok');
+  }
+
+  async function startRun(targets) {
+    if (state.running) {
+      toast('已经有一轮在跑了，稍等一下～', 'warn');
+      return;
+    }
+    if (!state.board.nodes.length) {
+      toast('画布是空的，先新建一个节点吧', 'warn');
+      return;
+    }
+
+    // 先把用户刚改的字段提交掉，避免运行读到旧内容
+    try { await flushAllPatches(); } catch (err) { /* flushPatch 内部已提示 */ }
+
+    state.running = true;
+    state.runEnded = false;
+    updateRunUI();
+
+    // 目标节点先清成 idle，等待 SSE 事件驱动状态
+    var targetIds = targets && targets.length
+      ? targets.slice()
+      : state.board.nodes.map(function (n) { return n.id; });
+    targetIds.forEach(function (id) {
+      var node = getNode(id);
+      if (!node) return;
+      node.status = 'idle';
+      node.error = '';
+      node.usage = {};
+      node.usedModel = '';
+      node.verdict = null;
+      updateNodeUI(node);
+    });
+    drawEdges();
+
+    if (DEMO) {
+      try {
+        await demoRun(targets);
+        state.runEnded = true;
+      } catch (err) {
+        toast('演示运行失败：' + err.message, 'error');
+      } finally {
+        state.running = false;
+        updateRunUI();
+      }
+      return;
+    }
+
+    try {
+      var res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(targets && targets.length ? { targets: targets } : {})
+      });
+      if (!res.ok) {
+        var detail = '';
+        try { detail = (await res.text()).slice(0, 240); } catch (err) { detail = ''; }
+        throw new Error('POST /api/run → ' + res.status + (detail ? ' · ' + detail : ''));
+      }
+      var ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (ct.indexOf('text/event-stream') !== -1) {
+        await readSSE(res, handleRunEvent);
+      } else {
+        var info = await res.json().catch(function () { return {}; });
+        var streamUrl = (info && (info.events || info.stream)) || '/api/events';
+        await listenSSE(streamUrl, handleRunEvent);
+      }
+      // 正常情况流以 run:end 收尾；没收到就在界面上提示，不静默
+      if (!state.runEnded) {
+        toast('事件流提前结束，部分卡片状态可能不准，刷新页面可确认结果', 'warn');
+      }
+    } catch (err) {
+      toast('运行失败：' + err.message, 'error');
+      // 收到了 HTTP 响应（比如 409 已有一轮在跑）说明服务还活着，只是拒绝执行；
+      // 网络断开才算连接失败。两种情况都在界面上可见。
+      var httpError = /POST \/api\/run → \d+/.test(err.message);
+      if (httpError) {
+        setConn(true, '已连接');
+        // 服务端拒绝时，用服务端数据把状态恢复回来
+        setTimeout(function () { if (!state.running) loadBoard(); }, 300);
+      } else {
+        setConn(false, err.message);
+        // 事件流中断时，别让卡片永远转圈
+        state.board.nodes.forEach(function (node) {
+          if (node.status === 'running') {
+            node.status = 'failed';
+            node.error = '事件流中断：' + err.message;
+            updateNodeUI(node);
+          }
+        });
+      }
+      drawEdges();
+    } finally {
+      state.running = false;
+      updateRunUI();
+    }
+  }
+
+  /* ------------------------------ 设置弹窗 ------------------------------ */
+  // 实际后端的 provider 行：model / baseURL / apiKey 各一个输入框
+  function makeProviderRow(name, provider) {
+    var row = make('div', { class: 'provider-row', 'data-name': name });
+    var head = make('div', { class: 'provider-head' });
+    head.appendChild(make('span', { text: provider.label || name }));
+    head.appendChild(make('span', {
+      class: 'key-state',
+      text: provider.hasKey ? '已保存 apiKey' : '未保存 apiKey'
+    }));
+
+    var fields = make('div', { class: 'provider-fields' });
+    var modelField = make('label', { class: 'field' }, [
+      make('span', { text: 'model' }),
+      make('input', {
+        class: 'p-model', type: 'text',
+        value: provider.model || '', placeholder: '例如 deepseek-chat'
+      })
+    ]);
+    var baseField = make('label', { class: 'field' }, [
+      make('span', { text: 'baseURL' }),
+      make('input', {
+        class: 'p-base', type: 'text',
+        value: provider.baseURL || '', placeholder: 'https://…'
+      })
+    ]);
+    var keyField = make('label', { class: 'field full' }, [
+      make('span', { text: 'apiKey' }),
+      make('input', {
+        class: 'p-key', type: 'password',
+        placeholder: '留空则保持不变', autocomplete: 'off'
+      })
+    ]);
+    fields.append(modelField, baseField, keyField);
+    row.append(head, fields);
+    return row;
+  }
+
+  function openSettings() {
+    var mockBox = $('#cfgMock');
+    if (mockBox) mockBox.checked = !!state.config.mock;
+
+    var providerBlock = $('#providerBlock');
+    var simpleBlock = $('#simpleBlock');
+    var rowsBox = $('#providerRows');
+    var providers = state.config.providers;
+    var useProviders = !!(providers && Object.keys(providers).length);
+
+    if (rowsBox) rowsBox.innerHTML = '';
+    if (useProviders) {
+      providerBlock.classList.remove('hidden');
+      simpleBlock.classList.add('hidden');
+      Object.keys(providers).forEach(function (name) {
+        rowsBox.appendChild(makeProviderRow(name, providers[name]));
+      });
+    } else {
+      providerBlock.classList.add('hidden');
+      simpleBlock.classList.remove('hidden');
+      $('#cfgBase').value = state.config.baseURL || '';
+      $('#cfgKey').value = '';
+      $('#cfgModels').value = (state.config.models.length ? state.config.models : DEFAULT_MODELS).join('\n');
+    }
+
+    var hint = $('#cfgMockHint');
+    if (hint) {
+      hint.textContent = state.config.mock
+        ? '当前后端为 mock 模式（不会发真实请求）'
+        : '当前后端为 real 模式（会调用真实模型）';
+    }
+    // MCP 列表：先按本地状态渲染，再后台刷新一次；接口没就绪只降级显示，不阻塞弹窗
+    renderMcpList();
+    loadMcp({ notify: false, retry: false });
+    $('#modal').classList.remove('hidden');
+    setTimeout(function () {
+      var first = useProviders ? rowsBox.querySelector('input') : $('#cfgBase');
+      if (first) first.focus();
+    }, 30);
+  }
+
+  function closeSettings() {
+    $('#modal').classList.add('hidden');
+  }
+
+  async function saveSettings() {
+    var mock = !!($('#cfgMock') && $('#cfgMock').checked);
+    var useProviders = !!(state.config.providers && Object.keys(state.config.providers).length);
+    var payload;
+
+    if (useProviders) {
+      // 实际后端：{ mock, providers: { name: { model, baseURL, apiKey? } } }
+      payload = { mock: mock, providers: {} };
+      var rows = document.querySelectorAll('#providerRows .provider-row');
+      Array.prototype.forEach.call(rows, function (row) {
+        var name = row.getAttribute('data-name');
+        var model = row.querySelector('.p-model').value.trim();
+        var baseURL = row.querySelector('.p-base').value.trim();
+        var apiKey = row.querySelector('.p-key').value.trim();
+        var inc = { model: model, baseURL: baseURL };
+        if (apiKey) inc.apiKey = apiKey; // 留空表示不修改已保存的 key
+        payload.providers[name] = inc;
+      });
+    } else {
+      // 契约形态：{ baseURL, models, apiKey?, mock }
+      var baseURL = ($('#cfgBase').value || '').trim();
+      var apiKey = ($('#cfgKey').value || '').trim();
+      var models = ($('#cfgModels').value || '')
+        .split(/[\s,，]+/)
+        .map(function (s) { return s.trim(); })
+        .filter(Boolean);
+      payload = { baseURL: baseURL, models: models, mock: mock };
+      if (apiKey) payload.apiKey = apiKey;
+    }
+
+    // mcpServers 和 providers 存在同一份配置里：把本地已知的带回去，避免保存时被覆盖
+    if (state.mcpSpecs && Object.keys(state.mcpSpecs).length) {
+      payload.mcpServers = state.mcpSpecs;
+    }
+
+    var btn = $('#btnSaveCfg');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    try {
+      if (DEMO) {
+        state.config.mock = mock;
+        if (!useProviders) {
+          state.config.baseURL = payload.baseURL;
+          state.config.models = payload.models;
+        }
+        toast('demo 模式：配置只保存在当前页面', 'warn');
+      } else {
+        await api('/api/config', { method: 'PUT', body: payload });
+        await loadConfig(); // 重新拉一次，保证 badge 和表单与后端一致
+        toast('配置已保存', 'ok');
+      }
+      renderModeBadge();
+      if (state.selectedId) {
+        var node = getNode(state.selectedId);
+        if (node) syncPanel(node);
+      }
+      closeSettings();
+    } catch (err) {
+      toast('保存配置失败：' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '保存';
+    }
+  }
+
+  /* ------------------------------ 事件绑定 ------------------------------ */
+  function bindUI() {
+    // 设置弹窗放在 form 里（密码输入需要 form 上下文），阻止回车提交刷新页面
+    var settingsForm = $('#settingsForm');
+    if (settingsForm) {
+      settingsForm.addEventListener('submit', function (e) { e.preventDefault(); });
+    }
+
+    $('#btnRun').addEventListener('click', function () { startRun(); });
+    $('#btnSettings').addEventListener('click', openSettings);
+    $('#btnModalClose').addEventListener('click', closeSettings);
+    $('#btnCancelCfg').addEventListener('click', closeSettings);
+    $('#btnSaveCfg').addEventListener('click', saveSettings);
+    $('#btnFirstNode').addEventListener('click', createFirstNode);
+    $('#btnRetry').addEventListener('click', function () {
+      loadConfig();
+      loadBoard();
+    });
+    $('#btnPanelClose').addEventListener('click', function () { selectNode(null); });
+    $('#btnRerun').addEventListener('click', function () {
+      if (state.selectedId) startRun([state.selectedId]);
+    });
+    $('#btnDelete').addEventListener('click', function () {
+      if (state.selectedId) deleteNode(state.selectedId);
+    });
+
+    // 面板字段编辑
+    $('#fLabel').addEventListener('input', function (e) {
+      var node = getNode(state.selectedId);
+      if (!node) return;
+      node.label = e.target.value;
+      updateNodeUI(node);
+      queuePatch(node.id, { label: node.label });
+    });
+    $('#fModel').addEventListener('change', function (e) {
+      var node = getNode(state.selectedId);
+      if (!node) return;
+      node.model = e.target.value;
+      updateNodeUI(node);
+      queuePatch(node.id, { model: node.model });
+    });
+    $('#fTask').addEventListener('input', function (e) {
+      var node = getNode(state.selectedId);
+      if (!node) return;
+      node.task = e.target.value;
+      queuePatch(node.id, { task: node.task });
+    });
+    $('#fCriteria').addEventListener('input', function (e) {
+      var node = getNode(state.selectedId);
+      if (!node) return;
+      node.criteria = e.target.value;
+      queuePatch(node.id, { criteria: node.criteria });
+    });
+
+    // 改上游：重建所有 to == 本节点的边（from 方向不动）
+    $('#fUp').addEventListener('change', function () {
+      var id = state.selectedId;
+      if (!id) return;
+      var sel = $('#fUp');
+      var picked = [];
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].selected) picked.push(sel.options[i].value);
+      }
+      state.board.edges = state.board.edges.filter(function (e) { return e.to !== id; });
+      picked.forEach(function (p) { state.board.edges.push({ from: p, to: id }); });
+      drawEdges();
+      persistBoardSoon();
+      toast(picked.length ? '上游已更新：' + picked.length + ' 个' : '上游已清空', 'ok');
+    });
+
+    // 技能 / 工具：复选框，勾选即挂载（事件委托，列表重建后不用重绑）
+    $('#skillList').addEventListener('change', onSkillsChange);
+    $('#toolList').addEventListener('change', onToolsChange);
+
+    // 结果判断：单选变更立即 PATCH
+    $('#verifyOptions').addEventListener('change', onVerifyChange);
+
+    // 待人工确认：通过 / 打回重跑
+    $('#btnVerifyPass').addEventListener('click', function () { submitVerify(true); });
+    $('#btnVerifyFail').addEventListener('click', function () { submitVerify(false); });
+
+    // 接口没就绪时，提示文字本身可以点着重试
+    $('#skillsHint').addEventListener('click', function () {
+      if (state.skillsStatus === 'error') loadSkills({ notify: true, retry: true });
+    });
+    $('#toolsHint').addEventListener('click', function () {
+      if (state.mcpStatus === 'error') loadMcp({ notify: true, retry: true });
+    });
+
+    // 设置弹窗里的 MCP：刷新列表 / 添加 stdio server
+    $('#btnMcpRefresh').addEventListener('click', function () {
+      if (state.mcpStatus !== 'loading') loadMcp({ notify: true, retry: true });
+    });
+    $('#btnMcpAdd').addEventListener('click', addMcpServer);
+
+    // 点弹窗遮罩关闭
+    $('#modal').addEventListener('click', function (e) {
+      if (e.target === $('#modal')) closeSettings();
+    });
+
+    // 缩放按钮
+    $('#zoomIn').addEventListener('click', function () { setZoom(state.view.s * 1.2); });
+    $('#zoomOut').addEventListener('click', function () { setZoom(state.view.s / 1.2); });
+    $('#zoomReset').addEventListener('click', resetView);
+
+    // Esc：先关弹窗，再取消选中
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      if (!$('#modal').classList.contains('hidden')) {
+        closeSettings();
+      } else if (state.selectedId) {
+        selectNode(null);
+      }
+    });
+
+    bindViewport();
+  }
+
+  /* ------------------------------ 启动 ------------------------------ */
+  async function boot() {
+    bindUI();
+    applyView();
+    updateRunUI();
+    if (DEMO) setConn(true, '演示模式');
+    await loadConfig();
+    await loadBoard();
+    // 技能 / MCP 是增强信息：异步加载，接口没就绪也不能拖垮画布
+    if (DEMO) {
+      state.skillsStatus = 'ok';
+      state.mcpStatus = 'ok';
+      syncPanelMulti();
+    } else {
+      loadSkills({ notify: true, retry: true });
+      loadMcp({ notify: true, retry: true });
+    }
+    drawEdges();
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
