@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-agentflow",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DeepSeek Harness tool plugin: run AgentFlow (material-canvas agent orchestrator) boards from the model",
   "keywords": [
     "dsh",

@@ -13,6 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { dataDir, writeJsonAtomic, exclusive } from './store.mjs';
+import { orchestratorPersona, orchestratorCriteria } from './preset-gen.mjs';
 
 export const FLOW_BOARD_ID = 'flow-agentflow';
 
@@ -247,6 +248,38 @@ function slugify(name) {
   return s || 'board';
 }
 
+/**
+ * 新建画布的默认根节点（调度卡 / 对话入口）。
+ *
+ * 产品约定：画布必须有一张且只有一张调度根节点，它承载人格、是对话入口。
+ * 新建时直接给一张，用户不用先手动派生再改类型；子节点仍然由用户自己派生。
+ * 根节点在后端删不掉（DELETE 命中 orchestrator 返回 400），所以不会退化成空画布。
+ */
+function defaultRootNode(name) {
+  return {
+    id: 'orchestrator',
+    label: `${name} · 调度`,
+    type: 'orchestrator',
+    provider: '',
+    model: '',
+    reasoningEffort: '',
+    fallback: [],
+    fallbackEfforts: {},
+    task: orchestratorPersona({ name }),
+    criteria: orchestratorCriteria(),
+    skills: [],
+    tools: [],
+    verify: '',
+    content: '',
+    status: 'idle',
+    usage: null,
+    error: null,
+    verdict: null,
+    x: 80,
+    y: 80,
+  };
+}
+
 /** 新建画布：presetId 有值就用它当 id（冲突报 409），否则由名字生成唯一 id。 */
 export async function createBoard({ name, presetId } = {}) {
   const safeName = String(name || '').trim() || '未命名画布';
@@ -273,7 +306,8 @@ export async function createBoard({ name, presetId } = {}) {
     }
 
     const now = Date.now();
-    const board = { id, name: safeName, nodes: [], edges: [] };
+    // 新建画布默认带一张调度根节点（对话入口），子节点由用户自己派生
+    const board = { id, name: safeName, nodes: [defaultRootNode(safeName)], edges: [] };
     const meta = { id, name: safeName, presetId: wantedPreset, createdAt: now, updatedAt: now };
     await writeJsonAtomic(boardFile(id), board);
     await writeIndex({
