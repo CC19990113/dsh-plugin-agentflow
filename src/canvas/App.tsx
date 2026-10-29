@@ -30,7 +30,7 @@ import type {
 import FlowCanvas from './components/FlowCanvas';
 import NodePanel from './components/NodePanel';
 import SettingsDialog from './components/SettingsDialog';
-import ExportPresetDialog from './components/ExportPresetDialog';
+import ExportCommandDialog from './components/ExportCommandDialog';
 
 type View = 'list' | 'board';
 
@@ -247,6 +247,13 @@ export default function App() {
 
   useEffect(() => {
     boardIdRef.current = currentBoardId;
+    // 内联模式：把「当前打开的是哪张画布」告诉宿主，设置页生成命令/看摘要才跟得上
+    if (!isInlineMode() || !currentBoardId) return;
+    try {
+      window.dispatchEvent(new CustomEvent('agentflow-board-active', { detail: { boardId: currentBoardId } }));
+    } catch {
+      /* 事件派发失败不影响画布本身 */
+    }
   }, [currentBoardId]);
 
   // 顶栏画布名跟随当前画布（只在名字变化时同步，避免打字被打断）
@@ -479,7 +486,7 @@ export default function App() {
     }
   }, [notify, clearDirty]);
 
-  /** 「保存」= 画布落库 + 生成/覆盖当前预设（预设名沿用画布名） */
+  /** 「保存」= 只把画布落库；命令是另一件事（对话框里点「生成」才写 commands 目录） */
   const saveNow = useCallback(async (): Promise<boolean> => {
     const current = boardRef.current;
     if (!current || savingRef.current) return false;
@@ -487,7 +494,6 @@ export default function App() {
     setSaving(true);
     try {
       await api.putBoard(current.id, current);
-      await api.exportPreset(current.id, current.name);
       clearDirty();
       setBoards((prev) =>
         prev.map((b) =>
@@ -496,7 +502,7 @@ export default function App() {
             : b
         )
       );
-      notify('已保存，预设已更新');
+      notify('已保存');
       return true;
     } catch (err) {
       notify(`保存失败：${(err as Error).message}`, 'err');
@@ -947,7 +953,7 @@ export default function App() {
                 disabled={!board}
                 onClick={() => void openExport()}
               >
-                导出预设
+                生成命令
               </Button>
 
               <Button
@@ -1215,7 +1221,7 @@ export default function App() {
           onError={(msg) => notify(msg, 'err')}
         />
 
-        <ExportPresetDialog
+        <ExportCommandDialog
           open={exportOpen}
           boardId={currentBoardId}
           boardName={boardName}

@@ -17,7 +17,6 @@
 import {
   Component,
   useEffect,
-  useRef,
   useState,
   type ErrorInfo,
   type ReactNode,
@@ -95,7 +94,6 @@ function RenderErrorCard({ error, onRetry }: { error: Error; onRetry: () => void
 function AgentFlowPage(): ReactNode {
   const [boardId, setBoardId] = useState(targetBoardId);
   // 画布会把它有没有未保存修改 postMessage 过来；切回对话时用这个提示
-  const dirtyRef = useRef(false);
   useEffect(() => {
     boardListeners.add(setBoardId);
     return () => {
@@ -169,10 +167,10 @@ function AgentFlowIcon({ size }: { size?: number }): ReactNode {
 /** 页面地址：构建时写死默认值，运行期可被插件配置覆写 */
 let PAGE_URL = 'http://127.0.0.1:8791';
 
-/** apply 时注入；设置页「编辑」优先用它把主视图切到画布，而不是弹浏览器 */
+/** apply 时注入；设置页「打开画布」优先用它把主视图切到画布，而不是弹浏览器 */
 let layoutApi: ClientCtx['layout'] | null = null;
 
-/** 当前要打开的画布 id（设置页点某个预设的「编辑」时设置），native 与 iframe 都用它 */
+/** 当前要打开的画布 id（设置页点「打开画布」时设置），native 与 iframe 两种模式都用它 */
 let targetBoardId = '';
 const boardListeners = new Set<(id: string) => void>();
 
@@ -320,7 +318,7 @@ function applyInner(ctx: ClientCtx, config?: PluginConfig): void {
     ctx.slots.register({ name: 'main', key: PANEL_ID }, AgentFlowPage),
   );
 
-  // 设置页「AgentFlow」分区：不离开 DSH 就能把画布导出成预设
+  // 设置页「AgentFlow」分区：不离开 DSH 就能把当前画布生成成命令
   registerSlot(ctx, 'settings.section', 'settings.section', () =>
     ctx.slots.register(
       {
@@ -334,11 +332,11 @@ function applyInner(ctx: ClientCtx, config?: PluginConfig): void {
     ),
   );
 
-  // 插件页「添加插件」菜单：多一个「从 AgentFlow 画布生成预设」
+  // 插件页「添加插件」菜单：多一个「从 AgentFlow 画布生成命令」
   registerSlot(ctx, 'plugins.add.actions', 'plugins.add.actions', () =>
     ctx.slots.register(
       { name: 'plugins.add.actions', id: 'agentflow-export', inject: () => ({}) },
-      ExportPresetMenuItem,
+      ExportCommandMenuItem,
     ),
   );
 
@@ -354,9 +352,10 @@ function applyInner(ctx: ClientCtx, config?: PluginConfig): void {
 /* ------------------------------------------------------------------ */
 /* 设置页「AgentFlow」分区 + 插件页「添加插件」菜单项                    */
 /*                                                                     */
-/* 作用：不离开 DSH 就能把当前画布导出成预设（写进 profile 的标记段），   */
-/* 导出后提示重启 DSH。数据来自本机 8791 的 /api/board 与               */
-/* /api/export/preset，跨源靠 server 的 CORS 白名单放行。               */
+/* 作用：不离开 DSH 就能把当前画布生成成 /命令（插件热注册，即时生效，   */
+/* 不写 profile）。设置页下半部分只列出 profile 里的历史预设供清理。     */
+/* 数据来自本机 8791 的 /api/board、/api/export/command 与 /api/presets，*/
+/* 跨源靠 server 的 CORS 白名单放行。                                   */
 /* ------------------------------------------------------------------ */
 
 /** 这两个入口共用的小卡片外观：用半透明边框/底色，深浅主题都能看 */
@@ -382,22 +381,48 @@ const BTN_STYLE = {
 const BTN_DISABLED = { ...BTN_STYLE, opacity: 0.55, cursor: 'not-allowed' } as const;
 
 interface BoardSummary {
+  id?: string;
   name?: string;
   nodes?: unknown[];
   edges?: unknown[];
 }
 
-interface ExportResult {
-  presetId?: string;
-  presetName?: string;
+interface ExportCommandResult {
+  ok?: boolean;
+  /** 生成的命令名（不含前导 /） */
+  name?: string;
+  board?: string;
+  boardName?: string;
   file?: string;
   replaced?: boolean;
   error?: string;
 }
 
-function useExportPreset() {
+/**
+ * 内联画布打开新画布时会派发 agentflow-board-active；
+ * 设置页/菜单靠它把「当前画布」对上，避免多画布时生成到索引第一张。
+ */
+function useActiveBoardId(): string {
+  const [id, setId] = useState('');
+  useEffect(() => {
+    const onActive = (event: Event) => {
+      const next = (event as CustomEvent<{ boardId?: string }>).detail?.boardId;
+      if (typeof next === 'string' && next) setId(next);
+    };
+    window.addEventListener('agentflow-board-active', onActive);
+    return () => window.removeEventListener('agentflow-board-active', onActive);
+  }, []);
+  return id;
+}
+
+/** 拼 ?board= 的公共小工具；空 id 就不带参数，交给服务端按默认画布处理。 */
+function withBoardQuery(url: string, boardId?: string): string {
+  return boardId ? `${url}${url.includes('?') ? '&' : '?'}board=${encodeURIComponent(boardId)}` : url;
+}
+
+function useExportCommand(boardId?: string) {
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<ExportResult | null>(null);
+  const [result, setResult] = useState<ExportCommandResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const run = () => {
@@ -405,13 +430,14 @@ function useExportPreset() {
     setBusy(true);
     setError(null);
     setResult(null);
-    fetch(`${PAGE_URL}/api/export/preset`, {
+    // 有当前画布就带 board；没有才让服务端按索引第一张兜底
+    fetch(`${PAGE_URL}${withBoardQuery('/api/export/command', boardId)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
     })
       .then(async (res) => {
-        const body = (await res.json().catch(() => ({}))) as ExportResult;
+        const body = (await res.json().catch(() => ({}))) as ExportCommandResult;
         if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
         return body;
       })
@@ -423,13 +449,14 @@ function useExportPreset() {
   return { busy, result, error, run };
 }
 
-function useBoardSummary() {
+function useBoardSummary(boardId?: string) {
   const [board, setBoard] = useState<BoardSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = () => {
     setError(null);
-    fetch(`${PAGE_URL}/api/board`)
+    // 有具体画布读 /api/boards/:id；没有才退回老的 /api/board（只认 flow-agentflow）
+    fetch(`${PAGE_URL}${boardId ? `/api/boards/${encodeURIComponent(boardId)}` : '/api/board'}`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return (await res.json()) as BoardSummary;
@@ -442,31 +469,32 @@ function useBoardSummary() {
   return { board, error, reload };
 }
 
-/** 结果块：成功说明写了哪里、要不要重启；失败直接给原因 */
-function ExportFeedback({
+/** 结果块：成功给命令名与用法（即时生效）；失败直接给原因 */
+function CommandFeedback({
   busy,
   result,
   error,
 }: {
   busy: boolean;
-  result: ExportResult | null;
+  result: ExportCommandResult | null;
   error: string | null;
 }): ReactNode {
   if (error) {
-    return <div style={{ marginTop: 10, fontSize: 12, color: '#B4451F', lineHeight: 1.6 }}>{`导出失败：${error}`}</div>;
+    return <div style={{ marginTop: 10, fontSize: 12, color: '#B4451F', lineHeight: 1.6 }}>{`生成失败：${error}`}</div>;
   }
   if (busy) {
-    return <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>正在写入 profile…</div>;
+    return <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>正在生成命令…</div>;
   }
   if (!result) return null;
+  const slash = result.name ? `/${result.name}` : '';
   return (
     <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.7 }}>
       <div>
-        {`已${result.replaced ? '更新' : '写入'}预设 `}
-        <b>{result.presetId || ''}</b>
+        {`已${result.replaced ? '更新' : '生成'}命令 `}
+        <b>{slash}</b>
       </div>
       <div style={{ opacity: 0.7, wordBreak: 'break-all' }}>{result.file || ''}</div>
-      <div style={{ marginTop: 4, fontWeight: 600 }}>重启 DSH 后生效</div>
+      <div style={{ marginTop: 4, fontWeight: 600 }}>{`输入框输入 ${slash} 即可使用（无需重启）`}</div>
     </div>
   );
 }
@@ -478,7 +506,6 @@ interface PresetItem {
   source: 'profile' | 'bundle';
   packageName: string | null;
   editable: boolean;
-  canCopy: boolean;
   order?: number;
 }
 
@@ -501,24 +528,6 @@ function usePresets() {
 
   useEffect(reload, []);
 
-  const copy = (item: PresetItem) => {
-    setBusyId(item.id);
-    setError(null);
-    fetch(`${PAGE_URL}/api/presets/${encodeURIComponent(item.id)}/copy`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: `${item.name} 副本` }),
-    })
-      .then(async (res) => {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-        return body;
-      })
-      .then(() => reload())
-      .catch((err) => setError(String((err && err.message) || err)))
-      .finally(() => setBusyId(null));
-  };
-
   const remove = (item: PresetItem) => {
     if (!window.confirm(`删除预设「${item.name}」？只删 profile 里的这一行，重启 DSH 生效。`)) return;
     setBusyId(item.id);
@@ -534,7 +543,7 @@ function usePresets() {
       .finally(() => setBusyId(null));
   };
 
-  return { presets, error, busyId, reload, copy, remove };
+  return { presets, error, busyId, reload, remove };
 }
 
 const CHIP_STYLE = {
@@ -581,7 +590,7 @@ function SmallButton({
 function AgentFlowSettingsSection({ close }: { close?: () => void }): ReactNode {
   const [canvasOpen, setCanvasOpen] = useState(false);
   const openCanvas = (boardId: string) => {
-    // 记住要打开哪张画布：预设 id 就是画布 id
+    // 记住要打开哪张画布：native 切主视图、iframe 回滚走内嵌浮层都读它
     setTargetBoard(boardId);
     // 宿主渲染 settings.section 时会传 close（关闭设置弹窗那个函数）。
     // 先切主视图，切成功了再关设置，这样就直接看到画布；切不了才内嵌 iframe。
@@ -595,9 +604,10 @@ function AgentFlowSettingsSection({ close }: { close?: () => void }): ReactNode 
     }
     setCanvasOpen(true);
   };
-  const { board, error: boardError, reload } = useBoardSummary();
-  const { busy, result, error, run } = useExportPreset();
-  const { presets, error: presetError, busyId, reload: reloadPresets, copy, remove } = usePresets();
+  const activeBoardId = useActiveBoardId();
+  const { board, error: boardError, reload } = useBoardSummary(activeBoardId);
+  const { busy, result, error, run } = useExportCommand(activeBoardId);
+  const { presets, error: presetError, busyId, reload: reloadPresets, remove } = usePresets();
   const nodes = board?.nodes?.length ?? 0;
   const edges = board?.edges?.length ?? 0;
 
@@ -649,13 +659,23 @@ function AgentFlowSettingsSection({ close }: { close?: () => void }): ReactNode 
           />
         </div>
       ) : null}
-      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>AgentFlow 画布 → 预设</div>
-      <div style={{ fontSize: 12.5, lineHeight: 1.7, opacity: 0.78 }}>
-        {boardError
-          ? `读不到画布：${boardError}（确认 AgentFlow 服务在 ${PAGE_URL} 运行）`
-          : board
-            ? `当前画布「${board.name || '未命名'}」${nodes} 个节点 / ${edges} 条连线`
-            : '正在读取画布…'}
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>AgentFlow 画布 → 命令</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ fontSize: 12.5, lineHeight: 1.7, opacity: 0.78, flex: 1 }}>
+          {boardError
+            ? `读不到画布：${boardError}（确认 AgentFlow 服务在 ${PAGE_URL} 运行）`
+            : board
+              ? `当前画布「${board.name || '未命名'}」${nodes} 个节点 / ${edges} 条连线`
+              : '正在读取画布…'}
+        </div>
+        <SmallButton
+          onClick={() => {
+            if (board && board.id) openCanvas(board.id);
+          }}
+          disabled={!board || !board.id}
+        >
+          打开画布
+        </SmallButton>
       </div>
       <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
         <button
@@ -664,7 +684,7 @@ function AgentFlowSettingsSection({ close }: { close?: () => void }): ReactNode 
           disabled={busy || boardError !== null}
           style={busy || boardError !== null ? BTN_DISABLED : BTN_STYLE}
         >
-          {busy ? '导出中…' : '导出当前画布为预设'}
+          {busy ? '生成中…' : '生成当前画布命令'}
         </button>
         <button
           type="button"
@@ -683,7 +703,7 @@ function AgentFlowSettingsSection({ close }: { close?: () => void }): ReactNode 
         </button>
       </div>
 
-      {/* ---- 自定义预设列表：可复制、可删除、可进画布编辑 ---- */}
+      {/* ---- 旧预设清理：预设生成已下线，只列历史残留并提供删除 ---- */}
       <div style={{ marginTop: 16, borderTop: '1px solid rgba(128,130,120,0.25)', paddingTop: 12 }}>
         <div
           style={{
@@ -693,16 +713,19 @@ function AgentFlowSettingsSection({ close }: { close?: () => void }): ReactNode 
             marginBottom: 8,
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 600 }}>自定义预设</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>旧预设清理</div>
           <SmallButton onClick={reloadPresets} disabled={busyId !== null}>
             刷新
           </SmallButton>
+        </div>
+        <div style={{ fontSize: 11.5, opacity: 0.68, lineHeight: 1.6, marginBottom: 8 }}>
+          预设生成已下线，这里只清理历史残留（profile 里旧预设留下的行）；删除后重启 DSH 生效。
         </div>
         {presetError ? <div style={{ fontSize: 12, color: '#B4451F' }}>{`读取失败：${presetError}`}</div> : null}
         {!presets ? (
           <div style={{ fontSize: 12, opacity: 0.7 }}>读取中…</div>
         ) : presets.length === 0 ? (
-          <div style={{ fontSize: 12, opacity: 0.7 }}>还没有自定义预设</div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>没有历史预设残留</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {presets.map((item) => (
@@ -733,31 +756,24 @@ function AgentFlowSettingsSection({ close }: { close?: () => void }): ReactNode 
                     <span style={CHIP_STYLE}>{item.source === 'profile' ? 'profile' : item.packageName || '插件包'}</span>
                   </div>
                 </div>
-                <SmallButton onClick={() => copy(item)} disabled={busyId !== null}>
-                  {busyId === item.id ? '处理中…' : '复制'}
-                </SmallButton>
                 {item.editable ? (
                   <SmallButton onClick={() => remove(item)} disabled={busyId !== null} danger>
-                    删除
+                    {busyId === item.id ? '删除中…' : '删除'}
                   </SmallButton>
                 ) : null}
-                {/* 编辑 = 进 AgentFlow 画布（切主视图；宿主不给就内嵌 iframe） */}
-                <SmallButton onClick={() => openCanvas(item.id)}>编辑</SmallButton>
               </div>
             ))}
           </div>
         )}
-        <div style={{ fontSize: 11, opacity: 0.6, marginTop: 8, lineHeight: 1.6 }}>
-          插件包自带的预设（Sharp Agent / 群友腔）只能复制成自己的再改；删除与编辑只对 profile 里的预设开放。改完记得重启 DSH。
-        </div>
       </div>
-      <ExportFeedback busy={busy} result={result} error={error} />
+      <CommandFeedback busy={busy} result={result} error={error} />
     </div>
   );
 }
 
-function ExportPresetMenuItem(): ReactNode {
-  const { busy, error, run } = useExportPreset();
+function ExportCommandMenuItem(): ReactNode {
+  const activeBoardId = useActiveBoardId();
+  const { busy, result, error, run } = useExportCommand(activeBoardId);
   return (
     <button
       type="button"
@@ -776,9 +792,14 @@ function ExportPresetMenuItem(): ReactNode {
         opacity: busy ? 0.6 : 1,
       }}
     >
-      {busy ? '正在导出 AgentFlow 预设…' : '从 AgentFlow 画布生成预设'}
+      {busy ? '正在生成 AgentFlow 命令…' : '从 AgentFlow 画布生成命令'}
       {error ? (
         <span style={{ display: 'block', fontSize: 11, color: '#B4451F' }}>{error}</span>
+      ) : null}
+      {!error && result && result.name ? (
+        <span style={{ display: 'block', fontSize: 11, opacity: 0.7, marginTop: 2, lineHeight: 1.6 }}>
+          {`已${result.replaced ? '更新' : '生成'} /${result.name}，输入框输入即可使用（无需重启）`}
+        </span>
       ) : null}
     </button>
   );

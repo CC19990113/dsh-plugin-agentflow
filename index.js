@@ -23,6 +23,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { startBridge } from './lib/bridge.js';
+import { startObserver } from './lib/observe.js';
+import { startCommands, createNodeDoneTool } from './lib/commands.js';
 
 export const name = 'tool-agentflow';
 
@@ -299,6 +301,47 @@ export function apply(ctx, config = {}) {
   // 模型通道：DSH 进程内的 llm bridge。AgentFlow server 通过发现文件找过来，
   // 再用 ctx.llm 调模型；启动失败只 warn，模型通道不可用不影响两个工具加载。
   ctx.effect(() => startBridge(ctx, { dir: bridgeDir }), 'agentflow: bridge');
+
+  // 观察器（阶段 1）：只记每步消息与每次工具调用，不拦不改。
+  // 用来在真正做「强制工作流」之前，看清模型实际怎么调工具、在哪收工。
+  // `observe: false` 关掉；`observeDir` 换落盘目录。
+  if (config.observe !== false) {
+    const observeRoot =
+      typeof config.observeDir === 'string' && config.observeDir
+        ? path.resolve(config.observeDir)
+        : path.join(dataDir, 'observe');
+    ctx.effect(() => startObserver(ctx, { root: observeRoot }).dispose, 'agentflow: observe');
+  }
+
+  // 命令（阶段 2）：引擎侧在 <dataDir>/commands/ 下写命令文件，这里热注册成
+  // DSH 的 /agentflow-xxx。宿主没有 commands 服务时 startCommands 内部只 warn，
+  // 插件照常加载；`commands: false` 关掉。
+  let commandsApi = null;
+  if (config.commands !== false) {
+    ctx.effect(() => {
+      const api = startCommands(ctx, { dir, dataDir });
+      commandsApi = api;
+      return () => {
+        try {
+          api.dispose();
+        } finally {
+          if (commandsApi === api) commandsApi = null;
+        }
+      };
+    }, 'agentflow: commands');
+  }
+
+  // ---------- agentflow_node_done ----------
+  // 画布工作流的显式完成信号：工具全局注册，只有发起这次 run 的 agent 能调。
+  // 没有进行中的 run 时只回一句「当前没有工作流」，不报错。
+  ctx.tools.register(
+    createNodeDoneTool(
+      (agentId) => (commandsApi ? commandsApi.getRun(agentId) : null),
+      (agentId, run) => {
+        if (commandsApi && typeof commandsApi.persistRun === 'function') commandsApi.persistRun(agentId, run);
+      },
+    ),
+  );
 
   // ---------- agentflow_list ----------
   ctx.tools.register(

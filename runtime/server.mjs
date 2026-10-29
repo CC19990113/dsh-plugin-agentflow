@@ -11,6 +11,11 @@
 //   GET/PUT/DELETE /api/boards/:id/draft → 草稿（手动保存前的未落定修改）
 //   GET/PUT /api/board              → 旧接口过渡：读写 flow-agentflow
 //
+// 斜杠命令（落盘 <DATA_DIR>/commands/<name>.json，生成即生效）：
+//   POST   /api/export/command?board=<id> → 把画布挂成命令（body {name?}）
+//   GET    /api/commands           → 命令列表（带画布名 / 画布是否还在）
+//   DELETE /api/commands/:name     → 删命令
+//
 // 其余路由：
 //   GET    /                  → index.html
 //   POST   /api/nodes         → 新建节点（带 from 时自动建边）
@@ -40,7 +45,6 @@ import {
   renameBoard,
   deleteBoard,
   resolveBoard,
-  markPresetSynced,
   getBoard,
   mutateBoardById,
   ensureDefaultBoard,
@@ -48,7 +52,11 @@ import {
   getDraft,
   deleteDraft,
   httpError,
+  readIndex,
+  boardFile,
 } from './boards.mjs';
+import { assertRootHasNoUpstream } from './orchestrator.mjs';
+import { deleteCommand, isValidCommandName, listCommands, writeCommand } from './commands.mjs';
 import { normalizeConfig, makeCaller } from './llm.mjs';
 import { listSkills, defaultSkillDirs } from './skills.mjs';
 import { askJev, selfVerify } from './verify.mjs';
@@ -227,28 +235,6 @@ async function ensureMcpPool() {
 }
 
 /** 给 /api/mcp 用的快照：配置了哪些 server、连没连上、有哪些工具 */
-/** 当前可用的全部技能名与全部 MCP 工具名（根节点默认全选） */
-async function allSkillsAndTools() {
-  let skills = [];
-  try {
-    const dirs = (await buildCfg()).skillDirs?.length ? (await buildCfg()).skillDirs : defaultSkillDirs();
-    const listed = await listSkills(dirs);
-    skills = (Array.isArray(listed) ? listed : []).map((x) => x.name);
-  } catch {
-    skills = [];
-  }
-  let tools = [];
-  try {
-    const snap = await mcpSnapshot();
-    for (const server of snap.servers || []) {
-      for (const tool of server.tools || []) tools.push(`${server.name}.${tool.name}`);
-    }
-  } catch {
-    tools = [];
-  }
-  return { skills, tools };
-}
-
 async function mcpSnapshot() {
   const cfg = await buildCfg();
   const specs = cfg.mcpServers || {};
@@ -300,18 +286,10 @@ const nowId = () => 'n' + Math.random().toString(36).slice(2, 8);
 // PUT /api/board 只允许改这些字段：拖动不该把物料冲掉
 const LAYOUT_FIELDS = ['x', 'y', 'label', 'task', 'criteria', 'model', 'provider', 'reasoningEffort', 'fallback', 'fallbackEfforts', 'type', 'skills', 'tools', 'verify', 'tool', 'args'];
 
-// ---------- 导出 DSH 预设 ----------
-
-// 懒加载：preset-gen.mjs 由另一个任务并行写，文件暂时不存在时不能把服务带崩
-let presetGen = null;
-async function getPresetGen() {
-  if (presetGen) return presetGen;
-  presetGen = await import('./preset-gen.mjs');
-  return presetGen;
-}
-
-/** 给用户照着敲的安装命令。不自动改 profile —— 改 profile 的风险太大，踩过坑。 */
-// ---------- 把生成的预设装进 profile ----------
+// ---------- 遗留预设：自定义预设装在哪个 profile ----------
+//
+// 预设生成已下线（画布现在导出的是斜杠命令），这里只剩历史兼容：
+// /api/presets（列出/复制/删除旧预设）与 /api/boards/import-preset 还在用。
 
 // 预设写到哪个 profile：默认 DSH 桌面版的 desktop，允许用 AGENTFLOW_PROFILE 覆盖
 const PRESET_PROFILE = () =>
@@ -530,7 +508,7 @@ const server = http.createServer(async (req, res) => {
   const method = req.method;
 
   // DSH 的客户端插件在 dsh-app:// 里跑，来调本机 API 属于跨源调用。
-  // 只放行本机壳与本机页面，不放 *：导出预设会改写 profile，不能让任意网页触发。
+  // 只放行本机壳与本机页面，不放 *：生成命令会写 DATA_DIR，不能让任意网页触发。
   const origin = String(req.headers.origin || '');
   const originOk = !origin
     || origin.startsWith('dsh-app://')
@@ -759,8 +737,7 @@ const server = http.createServer(async (req, res) => {
             }
           }
           try {
-            const gen = await import('./preset-gen.mjs');
-            gen.assertRootHasNoUpstream(incoming);
+            assertRootHasNoUpstream(incoming);
           } catch (err) {
             if (err && err.status) return json(res, 400, { error: String(err.message) });
           }
@@ -933,73 +910,67 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // --- 导出 DSH 预设：直接写进插件包，不再生成独立包 ---
-    if (p === '/api/export/preset' && method === 'POST') {
+    // --- 生成斜杠命令：把画布挂成 DSH 的命令，落盘 <DATA_DIR>/commands/<name>.json ---
+    if (p === '/api/export/command' && method === 'POST') {
       const ctx = await resolveBoardCtx(url.searchParams.get('board'));
-      const profileDir = PRESET_PROFILE();
-      const profileOk = await fs
-        .stat(profileDir)
-        .then((st) => st.isDirectory())
-        .catch(() => false);
-      if (!profileOk) {
+      const body = await readBody(req).catch(() => ({}));
+      const wantedName = body && typeof body.name === 'string' ? body.name.trim() : '';
+      if (wantedName && !isValidCommandName(wantedName)) {
         return json(res, 400, {
-          error: `找不到 profile：${profileDir}（可用 AGENTFLOW_PROFILE 指定 profile 名）`,
+          error: `命令名不合法：${wantedName}（只允许 ^[a-z][a-z0-9_-]*$，不超过 48 个字符）`,
         });
       }
-      const board = ctx.board;
-      const body = await readBody(req).catch(() => ({}));
-      // 自定义预设显示名（可选）：只影响预设名，presetId 仍由画布决定
-      const presetName = body && typeof body.name === 'string' ? body.name.trim() : '';
-      if (!board.nodes || board.nodes.length === 0) {
+      if (!Array.isArray(ctx.board.nodes) || ctx.board.nodes.length === 0) {
         return json(res, 400, { error: '画布是空的，先摆几个节点' });
       }
-      let gen;
-      try {
-        gen = await getPresetGen();
-      } catch {
-        return json(res, 500, { error: '预设生成器还没就绪（preset-gen.mjs 缺失）' });
-      }
+      // name 缺省时按画布 id 生成（agentflow-<slug>，重名自动加 -2/-3）
+      const out = await writeCommand({ board: ctx.id, name: wantedName || undefined });
+      return json(res, 200, {
+        ok: true,
+        name: out.name,
+        board: ctx.id,
+        boardName: ctx.board.name || ctx.id,
+        file: out.file,
+        replaced: out.replaced,
+      });
+    }
 
-      // 调度根节点 = 对话入口 = persona 来源。导出前先补齐：
-      // 多节点无调度卡时自动补一张并写回画布；已有只允许一张，多了直接拒绝。
-      let ensured;
-      try {
-        const { skills, tools } = await allSkillsAndTools();
-        ensured = gen.ensureOrchestrator(board, { skills, tools });
-        gen.assertRootHasNoUpstream(ensured.board);
-      } catch (err) {
-        return json(res, 400, { error: String((err && err.message) || err) });
+    // --- 命令列表：带上画布名与画布是否还在（画布删了命令不会自动消失）---
+    if (p === '/api/commands' && method === 'GET') {
+      const index = await readIndex();
+      const commands = [];
+      for (const rec of await listCommands()) {
+        const meta = index.boards[rec.board];
+        const boardExists =
+          Boolean(meta)
+          || (await fs
+            .stat(boardFile(rec.board))
+            .then((st) => st.isFile())
+            .catch(() => false));
+        let boardName = meta?.name || null;
+        if (!boardName && boardExists) {
+          boardName = (await getBoard(rec.board).catch(() => null))?.name || rec.board;
+        }
+        commands.push({
+          name: rec.name,
+          board: rec.board,
+          boardName,
+          boardExists,
+          createdAt: rec.createdAt,
+          file: rec.file,
+        });
       }
-      const exportBoard = ensured.board;
-      const addedOrchestrator = ensured.added
-        ? { id: ensured.added.id, label: ensured.added.label }
-        : null;
-      const personaSource = gen.personaSource(board);
-      if (addedOrchestrator || ensured.refreshed) {
-        // 先写回画布再生成：根节点的人格/技能是固定模板，刷新后页面能看到最新内容
-        await saveBoard(ctx.id, exportBoard);
-      }
+      return json(res, 200, { commands });
+    }
 
-      try {
-        const out = await gen.installPresetIntoProfile(exportBoard, {
-          patchFile: path.join(PRESET_PROFILE(), 'cordis.patch.yml'),
-          ...(presetName ? { name: presetName } : {}),
-        });
-        await markPresetSynced(ctx.id).catch(() => {});
-        return json(res, 200, {
-          ok: true,
-          profileDir: PRESET_PROFILE(),
-          file: out.file,
-          presetId: out.presetId,
-          presetName: out.name,
-          replaced: out.replaced,
-          personaPreview: gen.renderPersona(exportBoard),
-          addedOrchestrator,
-          personaSource,
-          needRestart: true,
-        });
-      } catch (err) {
-        return json(res, 400, { error: String((err && err.message) || err) });
+    // --- 删命令：DSH 侧下次扫描就没了 ---
+    {
+      const commandMatch = /^\/api\/commands\/([a-z][a-z0-9_-]{0,47})$/.exec(p);
+      if (commandMatch && method === 'DELETE') {
+        const name = commandMatch[1];
+        const removed = await deleteCommand(name);
+        if (!removed) return json(res, 404, { error: `命令不存在：${name}` });
+        return json(res, 200, { ok: true, name });
       }
     }
 

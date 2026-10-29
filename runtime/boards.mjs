@@ -13,7 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { dataDir, writeJsonAtomic, exclusive } from './store.mjs';
-import { orchestratorPersona, orchestratorCriteria } from './preset-gen.mjs';
+import { orchestratorPersona, orchestratorCriteria } from './orchestrator.mjs';
 
 export const FLOW_BOARD_ID = 'flow-agentflow';
 
@@ -428,6 +428,13 @@ export async function deleteBoard(id) {
     await fs.rm(boardFile(id), { force: true });
     await removeDraftUnlocked(id);
     legacyActive.delete(id);
+    // 画布没了，指向它的命令也该消失（失败不阻塞删画布）
+    try {
+      const { deleteCommandsForBoard } = await import('./commands.mjs');
+      await deleteCommandsForBoard(id);
+    } catch {
+      /* 命令清理是附带动作，删画布本身已经成功 */
+    }
     return { ok: true, id };
   });
 }

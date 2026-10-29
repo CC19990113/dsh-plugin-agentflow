@@ -639,9 +639,43 @@ async function main() {
     const dirD = path.join(root, 'd');
     const fakeD = createFakeLlm();
     const effects = [];
+    const hooks = new Map();
+
+    // 命令热注册的假宿主：ctx.inject(['commands']) 同步回调一个假 registry
+    const dataDirD = path.join(root, 'data-d');
+    const commandRegistered = new Map();
+    const commandCalls = { inject: [] };
+    const commandRuntime = {
+      register(definition) {
+        if (commandRegistered.has(definition.name)) throw new Error('duplicate ' + definition.name);
+        commandRegistered.set(definition.name, definition);
+        return () => commandRegistered.delete(definition.name);
+      },
+    };
+
+    // 造一张画布 + 一条命令，验证 apply 之后命令真的注册上了
+    await fs.mkdir(path.join(dataDirD, 'boards'), { recursive: true });
+    await fs.mkdir(path.join(dataDirD, 'commands'), { recursive: true });
+    await fs.writeFile(
+      path.join(dataDirD, 'boards.json'),
+      JSON.stringify({ order: ['board-demo'], boards: { 'board-demo': { id: 'board-demo', name: '测试画布' } } }),
+    );
+    await fs.writeFile(
+      path.join(dataDirD, 'boards', 'board-demo.json'),
+      JSON.stringify({ id: 'board-demo', name: '测试画布', nodes: [{ id: 'n1', label: '拆需求', task: '拆成任务' }], edges: [] }),
+    );
+    await fs.writeFile(
+      path.join(dataDirD, 'commands', 'agentflow-demo.json'),
+      JSON.stringify({ version: 1, name: 'agentflow-demo', board: 'board-demo', createdAt: 1 }),
+    );
+
     const pluginCtx = {
       llm: fakeD.llm,
       tools: { register() {} },
+      on(event, listener) {
+        hooks.set(event, listener);
+        return () => hooks.delete(event);
+      },
       effect(execute, label) {
         const disposer = execute();
         effects.push({ label, disposer });
@@ -649,17 +683,60 @@ async function main() {
           if (typeof disposer === 'function') await disposer();
         };
       },
+      inject(deps, callback) {
+        commandCalls.inject.push(deps);
+        callback({ commands: commandRuntime });
+        return { dispose() {} };
+      },
     };
-    indexModule.apply(pluginCtx, { agentflowDir: dirD, agentflowPort: dummyPort });
+    indexModule.apply(pluginCtx, {
+      agentflowDir: dirD,
+      agentflowPort: dummyPort,
+      // 观察器与命令默认开：测试必须把它们指到临时目录，别往真实 home 里写
+      observeDir: path.join(root, 'observe'),
+      dataDir: dataDirD,
+    });
+    eq(
+      'apply 挂上观察器的四个钩子',
+      [...hooks.keys()].sort(),
+      ['agent/pre-step', 'agent/turn-stopping', 'tools/execute', 'tools/post-execute'],
+    );
     const infoD = await waitForInfo(dirD);
     const healthD = await jsonRequest(infoD.info.port, '/health', { token: infoD.info.token });
     eq('apply 启动 bridge 后 /health 200', healthD.status, 200);
+
+    // commands 是可选依赖：apply 必须通过 ctx.inject(['commands']) 挂载
+    eq('apply 注入 commands 依赖', commandCalls.inject, [['commands']]);
+    ok(
+      'apply 注册了画布命令',
+      await waitUntil(() => commandRegistered.has('agentflow-demo')),
+      [...commandRegistered.keys()].join(','),
+    );
+    eq('命令描述带上画布名', commandRegistered.get('agentflow-demo')?.description, '进入「测试画布」工作流');
+
+    const demoSteers = [];
+    const demoReply = await commandRegistered.get('agentflow-demo').handler({
+      agent: { id: 'sess-demo', steer: (message) => demoSteers.push(message) },
+      rawInput: '跑一下',
+      attachments: [],
+      signal: new AbortController().signal,
+    });
+    eq('命令 handler 可执行', demoReply.kind, 'success');
+    eq('命令 handler 进入画布', demoReply.text, '已进入画布「测试画布」，根节点开始');
+    ok(
+      '命令 handler 把画布与用户输入 steer 给会话',
+      demoSteers.length === 1 &&
+        String(demoSteers[0].content?.[0]?.text).includes('用户说的：跑一下') &&
+        String(demoSteers[0].content?.[0]?.text).includes('agentflow_node_done'),
+      JSON.stringify(demoSteers),
+    );
 
     for (const effect of effects.reverse()) {
       if (typeof effect.disposer === 'function') await effect.disposer();
     }
     const fileGoneD = await fs.access(infoD.file).then(() => false, () => true);
     eq('effect dispose 后删除发现文件', fileGoneD, true);
+    eq('effect dispose 后命令全部注销', commandRegistered.size, 0);
   } finally {
     for (const stop of stops.reverse()) {
       try {

@@ -386,7 +386,6 @@ const TEST_PRESETS = [
     source: 'profile',
     packageName: null,
     editable: true,
-    canCopy: true,
   },
 ];
 
@@ -404,7 +403,18 @@ async function loadClient() {
     fetchCalls.push({ url, init });
     let body = {};
     if (url.includes('/api/board')) {
-      body = { name: '测试画布', nodes: [{ id: 'n1' }, { id: 'n2' }], edges: [{ id: 'e1' }] };
+      body = { id: 'demo', name: '测试画布', nodes: [{ id: 'n1' }, { id: 'n2' }], edges: [{ id: 'e1' }] };
+    } else if (url.includes('/api/export/command')) {
+      body = {
+        ok: true,
+        name: 'agentflow-demo',
+        board: 'demo',
+        boardName: '测试画布',
+        file: '/tmp/agent-flow-data/commands/agentflow-demo.json',
+        replaced: false,
+      };
+    } else if (url.includes('/api/commands')) {
+      body = { commands: [] };
     } else if (url.includes('/api/presets')) {
       body = { presets: TEST_PRESETS };
     }
@@ -462,6 +472,9 @@ async function loadClient() {
     navigator: { userAgent: 'node-selftest' },
   };
 
+  /** type -> listeners（只给上面那个极简事件总线用） */
+  const listeners = new Map();
+
   vm.createContext(sandbox);
   vm.runInContext('window = globalThis; self = globalThis;', sandbox);
   Object.assign(sandbox, {
@@ -472,9 +485,21 @@ async function loadClient() {
       addListener() {},
       removeListener() {},
     }),
-    addEventListener() {},
-    removeEventListener() {},
-    dispatchEvent() {},
+    // 极简事件总线：够跑「画布把当前画布回传给宿主」这条链路
+    addEventListener(type, listener) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(listener);
+    },
+    removeEventListener(type, listener) {
+      const list = listeners.get(type);
+      if (!list) return;
+      const at = list.indexOf(listener);
+      if (at >= 0) list.splice(at, 1);
+    },
+    dispatchEvent(event) {
+      for (const listener of listeners.get(event?.type) ?? []) listener(event);
+      return true;
+    },
     confirm: () => true,
     requestAnimationFrame: (fn) => setTimeout(fn, 0),
     cancelAnimationFrame: (id) => clearTimeout(id),
@@ -666,6 +691,39 @@ async function main() {
     await base.render.renderRoot(mainSlot.component, {});
     eq('重复挂载样式仍然只有一份（幂等）', base.document._styles.length, 1);
     ok('重复挂载后全局桥仍在', Boolean(base.sandbox.__AGENTFLOW_HOST__));
+
+    // ---- 插件页菜单项：生成命令 ----
+    base.render.resetComponentState();
+    let menuTree = await base.render.renderRoot(pluginMenu.component, {}, { flushEffects: true });
+    ok(
+      '菜单项文案是「从 AgentFlow 画布生成命令」',
+      textOf(menuTree).includes('从 AgentFlow 画布生成命令'),
+      textOf(menuTree)
+    );
+    // 内联画布回传当前画布后，生成命令必须带 board=，不能再盲目用索引第一张
+    base.sandbox.dispatchEvent({ type: 'agentflow-board-active', detail: { boardId: 'board-from-canvas' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    menuTree = await base.render.renderRoot(pluginMenu.component, {}, { flushEffects: true }); // 让 state 更新后的树参与断言
+
+    const menuButton = findAll(menuTree, (node) => node.tag === 'button')[0];
+    ok('菜单项渲染成 button', Boolean(menuButton));
+    if (menuButton) menuButton.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const menuAfter = textOf(await base.render.renderRoot(pluginMenu.component, {}));
+    ok('菜单项展示生成的命令名', menuAfter.includes('/agentflow-demo'), menuAfter);
+    ok('菜单项提示无需重启', menuAfter.includes('无需重启'), menuAfter);
+    ok(
+      '菜单项 POST 到 /api/export/command 且带上当前画布',
+      base.fetchCalls.some(
+        (call) =>
+          call.url.includes('/api/export/command') &&
+          call.url.includes('board=board-from-canvas') &&
+          call.init &&
+          call.init.method === 'POST'
+      ),
+      JSON.stringify(base.fetchCalls.map((call) => call.url).slice(-3))
+    );
+
     eq('自测期间的 effect 都没有抛错', base.render.effectErrors.length, 0);
   }
 
@@ -687,39 +745,81 @@ async function main() {
   }
 
   // =======================================================================
+  console.log('\n设置页：画布 → 命令 / 旧预设清理');
+  // =======================================================================
+  {
+    const client = await loadClient();
+    const { ctx, registered, mount } = createCtx();
+    client.mod.apply(ctx);
+    mount();
+
+    const settingsComponent = byName(registered).get('settings.section').component;
+    const settingsTree = await client.render.renderRoot(settingsComponent, {}, { flushEffects: true });
+    const settingsText = textOf(settingsTree);
+    ok('设置页渲染出「画布 → 命令」标题', settingsText.includes('AgentFlow 画布 → 命令'), settingsText);
+    ok('设置页有旧预设清理区', settingsText.includes('旧预设清理'), settingsText);
+    ok('设置页说明预设生成已下线', settingsText.includes('预设生成已下线'), settingsText);
+
+    const buttonTexts = findAll(settingsTree, (node) => node.tag === 'button').map((node) => textOf(node));
+    ok('设置页有生成命令按钮', buttonTexts.includes('生成当前画布命令'), buttonTexts.join('|'));
+    ok('历史预设条目给出删除按钮', buttonTexts.includes('删除'), buttonTexts.join('|'));
+    ok('设置页不再有复制按钮', !buttonTexts.includes('复制'), buttonTexts.join('|'));
+    ok('设置页不再有编辑按钮', !buttonTexts.includes('编辑'), buttonTexts.join('|'));
+
+    const openButton = findAll(
+      settingsTree,
+      (node) => node.tag === 'button' && textOf(node) === '打开画布'
+    )[0];
+    ok('设置页有「打开画布」按钮', Boolean(openButton));
+    eq('有画布 id 时「打开画布」可点', Boolean(openButton && !openButton.props.disabled), true);
+
+    const deleteButton = findAll(settingsTree, (node) => node.tag === 'button' && textOf(node) === '删除')[0];
+    ok('历史预设条目渲染出删除按钮', Boolean(deleteButton));
+    if (deleteButton) deleteButton.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    ok(
+      '删除历史预设走 DELETE /api/presets/<id>',
+      client.fetchCalls.some(
+        (call) => call.url.endsWith('/api/presets/demo-preset') && call.init && call.init.method === 'DELETE'
+      )
+    );
+
+    const genButton = findAll(
+      settingsTree,
+      (node) => node.tag === 'button' && textOf(node) === '生成当前画布命令'
+    )[0];
+    ok('生成命令按钮可点', Boolean(genButton));
+    if (genButton) genButton.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const afterGen = textOf(await client.render.renderRoot(settingsComponent, {}));
+    ok('设置页展示生成的命令名', afterGen.includes('/agentflow-demo'), afterGen);
+    ok('设置页提示无需重启', afterGen.includes('无需重启'), afterGen);
+    ok(
+      '设置页 POST 到 /api/export/command',
+      client.fetchCalls.some(
+        (call) => call.url.endsWith('/api/export/command') && call.init && call.init.method === 'POST'
+      )
+    );
+  }
+
+  // =======================================================================
   console.log("\nagentflowRenderMode: 'iframe' 回滚模式");
   // =======================================================================
   {
     const client = await loadClient();
     const iframeBase = 'http://127.0.0.1:9999';
-    const { ctx, registered, selected, mount } = createCtx();
+    const { ctx, registered, mount } = createCtx();
     client.mod.apply(ctx, { agentflowRenderMode: 'iframe', agentflowUrl: iframeBase });
     mount();
 
     const map = byName(registered);
-    // 渲染设置页 → 点某个预设的「编辑」→ 走 layout.selectPanel（真实宿主路径）
-    let closed = false;
-    const settingsTree = await client.render.renderRoot(
-      map.get('settings.section').component,
-      { close: () => { closed = true; } },
-      { flushEffects: true }
-    );
-    const editButton = findAll(
-      settingsTree,
-      (node) => node.tag === 'button' && node.children === '编辑'
-    )[0];
-    ok('设置页渲染出预设「编辑」按钮', Boolean(editButton));
-    if (editButton) editButton.props.onClick();
-    eq('「编辑」先切宿主主视图', selected, ['agentflow']);
-    eq('「编辑」成功后关闭设置弹窗', closed, true);
-
     client.render.resetComponentState(); // 模拟重新挂载主视图
     const pageTree = await client.render.renderRoot(map.get('main').component, {});
     const iframes = findAll(pageTree, (node) => node.tag === 'iframe');
     eq('iframe 模式创建 iframe', iframes.length, 1);
     const src = (iframes[0] && iframes[0].props.src) || '';
     eq('iframe src 指向配置的地址', src.startsWith(`${iframeBase}/?`), true);
-    ok('iframe src 带 board 参数', src.includes('board=demo-preset'));
+    eq('iframe src 不再默认带 board 参数', src.includes('board='), false);
     ok('iframe src 带 theme 参数', src.includes('theme=light'));
     eq(
       'iframe 模式不渲染 CanvasHost 宿主节点',

@@ -4,7 +4,6 @@ import { Checkbox, Input, Select, Tree, TreeSelect } from 'antd';
 import {
   ArrowDown,
   ArrowUp,
-  ChevronDown,
   LoaderCircle,
   RotateCcw,
   Search,
@@ -415,13 +414,6 @@ function NodePanelBody(props: Props) {
     if (checked) set.add(name);
     else set.delete(name);
     onPatch({ skills: [...set] });
-  }
-
-  function toggleTool(key: string, checked: boolean) {
-    const set = new Set(node.tools);
-    if (checked) set.add(key);
-    else set.delete(key);
-    onPatch({ tools: [...set] });
   }
 
   // 模型选项来自 DSH 目录（provider 分组）。老画布的 model 存的是 provider 名，

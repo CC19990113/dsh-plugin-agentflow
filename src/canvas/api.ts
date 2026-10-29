@@ -1,5 +1,5 @@
 // 后端 API 封装。所有失败都抛 Error，由调用方 toast。
-// 多画布：列表 / 画布 CRUD 走 /api/boards*；节点、运行、导出都带 ?board=<id>。
+// 多画布：列表 / 画布 CRUD 走 /api/boards*；节点、运行、生成命令都带 ?board=<id>。
 
 import type {
   Board,
@@ -13,22 +13,26 @@ import type {
   Skill,
 } from './types';
 
-/** POST /api/export/preset 的成功返回 */
-export interface ExportPresetResult {
-  ok: boolean;
-  /** 预设写进了哪个 profile（bundle patch 展开机制的硬约束） */
-  profileDir: string;
+/** 一条斜杠命令（对应 <dataDir>/commands/<name>.json） */
+export interface CommandRecord {
+  name: string;
+  board: string;
+  /** 画布名；画布已删但命令还留着时为 null */
+  boardName: string | null;
+  boardExists: boolean;
+  createdAt: number;
   file: string;
-  presetId: string;
-  presetName: string;
-  /** true = 替换了上次生成的预设段，而不是新增 */
+}
+
+/** POST /api/export/command 的成功返回 */
+export interface ExportCommandResult {
+  ok: boolean;
+  name: string;
+  board: string;
+  boardName: string;
+  file: string;
+  /** true = 覆盖了同名旧命令（createdAt 沿用第一次） */
   replaced: boolean;
-  personaPreview: string;
-  needRestart?: boolean;
-  /** 画布没有调度（根）节点时，后端导出时自动补的那张；没补则为 null/缺省 */
-  addedOrchestrator?: { id: string; label: string } | null;
-  /** 导出时 persona 从哪来的 */
-  personaSource?: 'orchestrator' | 'single-card' | 'auto-orchestrator' | string;
 }
 
 /**
@@ -161,11 +165,20 @@ export const api = {
       body: JSON.stringify(cfg),
     }),
 
-  /** 导出 DSH agent preset；boardId 决定导出哪张画布，name 是预设显示名 */
-  exportPreset: (boardId?: string | null, name?: string) =>
-    req<ExportPresetResult>(withBoard('/api/export/preset', boardId), {
+  /** 生成斜杠命令；boardId 决定挂哪张画布，name 是自定义命令名（缺省按画布 id 生成） */
+  exportCommand: (boardId?: string | null, name?: string) =>
+    req<ExportCommandResult>(withBoard('/api/export/command', boardId), {
       method: 'POST',
       body: JSON.stringify(name ? { name } : {}),
+    }),
+
+  /** 全部命令（带画布名与画布是否还在） */
+  listCommands: () => req<{ commands: CommandRecord[] }>('/api/commands'),
+
+  /** 删命令；不存在时后端回 404 */
+  deleteCommand: (name: string) =>
+    req<{ ok: boolean; name: string }>(`/api/commands/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
     }),
 
   /** 人工确认：通过或打回 */
