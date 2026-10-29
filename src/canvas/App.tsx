@@ -923,7 +923,7 @@ export default function App() {
                 disabled={!board}
                 loading={saving}
                 onClick={() => void saveNow()}
-                title="保存画布并更新预设（⌘S / Ctrl+S）"
+                title="保存画布（⌘S / Ctrl+S）"
               >
                 保存
               </Button>
@@ -976,7 +976,7 @@ export default function App() {
               <div className="mb-5">
                 <h1 className={`text-[20px] font-semibold tracking-tight ${INK}`}>画布</h1>
                 <p className={`mt-1 text-[12px] leading-[1.6] ${MUTED}`}>
-                  每张画布对应一个 DSH 预设；编辑会自动保存，点「保存」才会更新/生成预设。
+                  每张画布就是一张工作流；编辑自动保存，点「生成命令」把它变成一条对话命令。
                 </p>
               </div>
 
@@ -1042,12 +1042,12 @@ export default function App() {
                                   className={`mt-0.5 truncate text-[11px] leading-[1.6] ${MUTED}`}
                                   title={
                                     boardEntries[item.id] ||
-                                    '没有调度卡，首次导出会自动补一张'
+                                    '没有调度卡；生成命令前先补一张'
                                   }
                                 >
                                   对话入口：
                                   {boardEntries[item.id] ||
-                                    '未设置（首次导出会自动补一张调度卡）'}
+                                    '未设置（生成命令前先补一张调度卡）'}
                                 </p>
                               )}
                             </div>
@@ -1058,11 +1058,6 @@ export default function App() {
                               >
                                 {preset ? preset.name : '自定义'}
                               </Tag>
-                              {item.presetOutdated && (
-                                <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-                                  预设未更新
-                                </Tag>
-                              )}
                               {item.hasDraft && (
                                 <Tag color="gold" style={{ marginInlineEnd: 0 }}>
                                   草稿
@@ -1103,10 +1098,10 @@ export default function App() {
                     <>
                       <div className="mb-3 mt-8 flex flex-wrap items-baseline gap-2">
                         <h2 className={`text-[13px] font-semibold ${INK}`}>
-                          还没有画布的预设
+                          还没有画布的旧预设
                         </h2>
                         <span className={`text-[11px] ${FAINT}`}>
-                          从预设生成一张单卡片画布，再继续编辑
+                          从旧预设生成一张画布，再编辑并生成命令
                         </span>
                       </div>
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">

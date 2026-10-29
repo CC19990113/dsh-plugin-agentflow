@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AgentFlow · 物料画布</title>
-    <script type="module" crossorigin src="/assets/index-BxE5pyuf.js"></script>
+    <!-- 独立页面 / iframe 回退：画布根容器靠 .af-canvas{height:100%} 撑满，
+         样式作用域化之后 html/body/#root 的高度规则只留在这里（内联模式由 CanvasHost 负责） -->
+    <style>html,body,#root{height:100%;margin:0}</style>
+    <script type="module" crossorigin src="/assets/index-Bjj6NK57.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-BRBK2BoT.css">
   </head>
   <body>
